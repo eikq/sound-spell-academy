@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "artStyle": "stylized steampunk-arcane",
+  "sprites": [
+    {
+      "id": "projectile_fire_basic",
+      "type": "projectile",
+      "element": "fire",
+      "frames": 24,
+      "fps": 30,
+      "size": [128,128],
+      "loop": true,
+      "hitbox": { "radius": 16 },
+      "pivot": [0.5, 0.5],
+      "recommendedBlend": "add",
+      "sfx": { "ids": ["sfx_fire_cast_01"] },
+      "musicCue": null,
+      "path": "/sprites/projectiles/fire_basic_128.png"
+    },
+    {
+      "id": "impact_generic_small",
+      "type": "impact",
+      "element": "neutral",
+      "frames": 16,
+      "fps": 30,
+      "size": [256,256],
+      "loop": false,
+      "hitbox": { "radius": 24 },
+      "pivot": [0.5, 0.5],
+      "recommendedBlend": "screen",
+      "sfx": { "ids": ["sfx_impact_generic_01"] },
+      "musicCue": null,
+      "path": "/sprites/impacts/impact_generic_256.png"
+    }
+  ],
+  "backgrounds": [
+    {
+      "id": "bg_arcane_library",
+      "layers": 5,
+      "size": [1920,1080],
+      "tileable": true,
+      "path": "/backgrounds/arcane_library/"
+    }
+  ],
+  "ui": [
+    {
+      "id": "ui_spellbook_frame",
+      "type": "frame",
+      "path": "/sprites/UI/spellbook_frame.png"
+    }
+  ],
+  "audio": {
+    "sfx": [
+      { "id": "sfx_fire_cast_01", "formats": ["wav","ogg"], "path": "/sound/spells/fire_cast_01" },
+      { "id": "sfx_impact_generic_01", "formats": ["wav","ogg"], "path": "/sound/spells/impact_generic_01" }
+    ],
+    "music": [
+      { "id": "msc_battle_layer_pads", "bpm": 96, "mode": "dorian", "stems": ["pads","strings","choir","perc","sub"], "path": "/sound/music/battle_layer_pads" }
+    ]
+  }
+}

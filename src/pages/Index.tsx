@@ -7,6 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useSpeechRecognition } from "@/hooks/useSpeech";
 import FeedbackOverlay from "@/components/game/FeedbackOverlay";
 import SpellBook from "@/components/game/SpellBook";
+import MicVisualizer from "@/components/game/MicVisualizer";
 import { toast } from "sonner";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
@@ -16,7 +17,7 @@ const Index = () => {
   const [selected, setSelected] = useState<Spell | null>(spellsData[0]);
   const gameRef = useRef<SpellGameRef>(null);
 
-  const { listening, start, stop, result, error, loudness } = useSpeechRecognition();
+  const { listening, start, stop, result, error, loudness, pitchHz } = useSpeechRecognition();
 
   const [playerHP, setPlayerHP] = useState(100);
   const [enemyHP, setEnemyHP] = useState(100);
@@ -92,6 +93,7 @@ const Index = () => {
             <TabsContent value="practice" className="mt-4">
               <div className="grid gap-4">
                 <FeedbackOverlay target={selected?.name || ""} result={result} listening={listening} loudness={loudness} />
+                <MicVisualizer loudness={loudness} pitchHz={pitchHz || undefined} listening={listening} />
                 <div className="flex items-center gap-3">
                   <Button variant="hero" onClick={onCast} className="hover-scale">Cast by Speaking</Button>
                   {listening && (
@@ -118,6 +120,7 @@ const Index = () => {
                   </div>
                 </div>
                 <FeedbackOverlay target={selected?.name || ""} result={result} listening={listening} loudness={loudness} />
+                <MicVisualizer loudness={loudness} pitchHz={pitchHz || undefined} listening={listening} />
                 <div className="flex items-center gap-3">
                   <Button variant="hero" onClick={onCast} className="hover-scale">Speak Your Spell</Button>
                   {listening && (

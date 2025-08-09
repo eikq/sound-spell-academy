@@ -75,6 +75,7 @@ export function useSpeechRecognition() {
   const [result, setResult] = useState<PronunciationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loudness, setLoudness] = useState(0);
+  const [pitchHz, setPitchHz] = useState<number | null>(null);
 
   const targetRef = useRef<string>("");
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -119,19 +120,66 @@ export function useSpeechRecognition() {
     }
   }, []);
 
+  const estimatePitch = (buf: Float32Array, sampleRate: number): number | null => {
+    // Autocorrelation method
+    const SIZE = buf.length;
+    let rms = 0;
+    for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / SIZE);
+    if (rms < 0.01) return null; // too quiet
+
+    let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+    for (let i = 0; i < SIZE / 2; i++) if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+    for (let i = 1; i < SIZE / 2; i++) if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+
+    const buf2 = buf.slice(r1, r2);
+    const autocorr = new Array(buf2.length).fill(0);
+    for (let lag = 0; lag < buf2.length; lag++) {
+      for (let i = 0; i < buf2.length - lag; i++) {
+        autocorr[lag] += buf2[i] * buf2[i + lag];
+      }
+    }
+
+    let d = 0; while (autocorr[d] > autocorr[d + 1]) d++;
+    let max = -1, maxPos = -1;
+    for (let i = d; i < buf2.length; i++) {
+      if (autocorr[i] > max) { max = autocorr[i]; maxPos = i; }
+    }
+    if (maxPos <= 0) return null;
+
+    // Parabolic interpolation for better peak
+    const x1 = autocorr[maxPos - 1] || 0;
+    const x2 = autocorr[maxPos];
+    const x3 = autocorr[maxPos + 1] || 0;
+    const a = (x1 + x3 - 2 * x2) / 2;
+    const b = (x3 - x1) / 2;
+    const shift = a ? -b / (2 * a) : 0;
+    const period = maxPos + shift;
+    if (!period || period === Infinity) return null;
+    const freq = sampleRate / period;
+    if (freq < 50 || freq > 600) return null;
+    return freq;
+  };
+
   const measure = useCallback(() => {
     const analyser = analyserRef.current;
     if (!analyser) return;
     const buffer = new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(buffer);
+
+    // Loudness RMS
     let sumSquares = 0;
-    for (let i = 0; i < buffer.length; i++) {
-      sumSquares += buffer[i] * buffer[i];
-    }
+    for (let i = 0; i < buffer.length; i++) sumSquares += buffer[i] * buffer[i];
     const rms = Math.sqrt(sumSquares / buffer.length);
     const normalized = Math.max(0, Math.min(1, (rms - 0.02) / 0.25));
     peakRmsRef.current = Math.max(peakRmsRef.current, normalized);
     setLoudness(normalized);
+
+    // Pitch
+    const sr = audioCtxRef.current?.sampleRate || 44100;
+    const freq = estimatePitch(buffer, sr);
+    setPitchHz(freq ?? null);
+
     rafRef.current = requestAnimationFrame(measure);
   }, []);
 
@@ -209,5 +257,5 @@ export function useSpeechRecognition() {
     };
   }, [stop]);
 
-  return { listening, start, stop, result, error, loudness } as const;
+  return { listening, start, stop, result, error, loudness, pitchHz } as const;
 }
