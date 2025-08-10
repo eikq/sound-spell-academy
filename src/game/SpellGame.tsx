@@ -4,7 +4,7 @@ import { BloomFilter, GlowFilter, ShockwaveFilter, GodrayFilter } from "pixi-fil
 import type { Element } from "./spells/data";
 
 export interface SpellGameRef {
-  castSpell: (element: Element, power: number) => void;
+  castSpell: (element: Element, power: number, from?: 'player' | 'enemy') => void;
 }
 
 const elementColors: Record<Element, number> = {
@@ -109,15 +109,18 @@ export const SpellGame = forwardRef<SpellGameRef>((_, ref) => {
     };
   }, []);
 
-  const castSpell = (element: Element, power: number) => {
+  const castSpell = (element: Element, power: number, from: 'player' | 'enemy' = 'player') => {
     const app = appRef.current;
     const world = worldRef.current;
     if (!app || !world) return;
 
     const color = elementColors[element];
     const projectile = new Graphics().circle(0, 0, 10 + power * 10).fill(color);
-    projectile.x = playerX.current;
-    projectile.y = heightRef.current - 100;
+    const startX = from === 'player' ? playerX.current : enemyX.current;
+    const targetX = from === 'player' ? enemyX.current : playerX.current;
+    const groundY = heightRef.current - 100;
+    projectile.x = startX;
+    projectile.y = groundY;
 
     const glow = new GlowFilter({ distance: 24, outerStrength: 2 + power * 2, color });
     projectile.filters = [glow] as any;
@@ -132,8 +135,8 @@ export const SpellGame = forwardRef<SpellGameRef>((_, ref) => {
     const update = () => {
       t += 1;
       const progress = Math.min(1, t / duration);
-      const x = playerX.current + (enemyX.current - playerX.current) * progress;
-      const y = (heightRef.current - 100) - Math.sin(progress * Math.PI) * (40 + power * 30);
+      const x = startX + (targetX - startX) * progress;
+      const y = groundY - Math.sin(progress * Math.PI) * (40 + power * 30);
 
       // draw trail
       trail.moveTo(projectile.x, projectile.y);
@@ -152,7 +155,7 @@ export const SpellGame = forwardRef<SpellGameRef>((_, ref) => {
           wavelength: 60,
           brightness: 1.0 + power * 0.3,
           radius: 120 + power * 120,
-          center: { x: enemyX.current, y: heightRef.current - 100 },
+          center: { x: targetX, y: groundY },
         });
         const prevFilters = (app.stage.filters || []) as any[];
         app.stage.filters = [...prevFilters, shock, new BloomFilter(1 + power * 0.5)] as any;

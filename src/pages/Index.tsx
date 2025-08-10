@@ -4,20 +4,24 @@ import spellsData, { Spell, Element } from "@/game/spells/data";
 import { SpellGame, SpellGameRef } from "@/game/SpellGame";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import { useSpeechRecognition } from "@/hooks/useSpeech";
+import { useAutoSpell } from "@/hooks/useAutoSpell";
 import FeedbackOverlay from "@/components/game/FeedbackOverlay";
 import SpellBook from "@/components/game/SpellBook";
 import MicVisualizer from "@/components/game/MicVisualizer";
+import { SoundManager } from "@/game/sound/SoundManager";
 import { toast } from "sonner";
-
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
 const Index = () => {
   const [mode, setMode] = useState<"practice" | "duel">("practice");
   const [selected, setSelected] = useState<Spell | null>(spellsData[0]);
+  const [autoMode, setAutoMode] = useState(false);
   const gameRef = useRef<SpellGameRef>(null);
 
   const { listening, start, stop, result, error, loudness, pitchHz } = useSpeechRecognition();
+  const auto = useAutoSpell(spellsData);
 
   const [playerHP, setPlayerHP] = useState(100);
   const [enemyHP, setEnemyHP] = useState(100);
@@ -27,12 +31,21 @@ const Index = () => {
   }, [error]);
 
   useEffect(() => {
+    if (autoMode) {
+      stop();
+      auto.start();
+    } else {
+      auto.stop();
+    }
+  }, [autoMode, auto, stop]);
+
+  useEffect(() => {
     if (mode !== "duel") return;
     if (enemyHP <= 0 || playerHP <= 0) return;
     // Simple AI that "attacks" every 3s
     const id = setInterval(() => {
       const aiPower = 0.4 + Math.random() * 0.4; // 40-80%
-      gameRef.current?.castSpell(randomElement(), aiPower);
+      gameRef.current?.castSpell(randomElement(), aiPower, 'enemy');
       setPlayerHP((hp) => Math.max(0, hp - Math.round(aiPower * 12)));
     }, 3000);
     return () => clearInterval(id);
@@ -47,6 +60,7 @@ const Index = () => {
 
   const onCast = async () => {
     if (!selected) return toast("Select a spell first");
+    SoundManager.castStart(selected.element);
     await start(selected.name);
   };
 
@@ -55,11 +69,23 @@ const Index = () => {
     const accuracy = result.accuracy / 100;
     const power = clamp01(0.75 * accuracy + 0.25 * result.loudness);
     gameRef.current?.castSpell(selected.element, power);
-
+    SoundManager.castRelease(selected.element, power);
     if (mode === "duel") {
       setEnemyHP((hp) => Math.max(0, hp - Math.round(power * 15)));
     }
   }, [result, selected, mode]);
+
+  useEffect(() => {
+    const det = auto.lastDetected;
+    if (!det) return;
+    const power = det.power;
+    gameRef.current?.castSpell(det.spell.element, power);
+    SoundManager.castRelease(det.spell.element, power);
+    if (mode === "duel") {
+      setEnemyHP((hp) => Math.max(0, hp - Math.round(power * 15)));
+    }
+    setSelected(det.spell);
+  }, [auto.lastDetected, mode]);
 
   const resetDuel = () => {
     setEnemyHP(100);
@@ -67,6 +93,10 @@ const Index = () => {
   };
 
   const canonical = typeof window !== 'undefined' ? window.location.href : 'https://lovable.dev';
+  const overlayTarget = (auto.lastDetected?.spell?.name ?? selected?.name) || "";
+  const displayResult = auto.lastDetected?.result || result;
+  const vizLoudness = autoMode ? auto.loudness : loudness;
+  const vizPitch = autoMode ? auto.pitchHz || undefined : pitchHz || undefined;
 
   return (
     <>
@@ -92,13 +122,17 @@ const Index = () => {
             </TabsList>
             <TabsContent value="practice" className="mt-4">
               <div className="grid gap-4">
-                <FeedbackOverlay target={selected?.name || ""} result={result} listening={listening} loudness={loudness} />
-                <MicVisualizer loudness={loudness} pitchHz={pitchHz || undefined} listening={listening} />
+                <FeedbackOverlay target={overlayTarget} result={displayResult} listening={listening || auto.listening} loudness={vizLoudness} />
+                <MicVisualizer loudness={vizLoudness} pitchHz={vizPitch} listening={listening || auto.listening} />
                 <div className="flex items-center gap-3">
-                  <Button variant="hero" onClick={onCast} className="hover-scale">Cast by Speaking</Button>
-                  {listening && (
+                  <Button variant="hero" onClick={onCast} className="hover-scale" disabled={autoMode}>Cast by Speaking</Button>
+                  {listening && !autoMode && (
                     <Button variant="outline" onClick={stop}>Stop</Button>
                   )}
+                  <div className="flex items-center gap-2 ml-auto">
+                    <span className="text-sm text-muted-foreground">Auto-cast</span>
+                    <Switch checked={autoMode} onCheckedChange={setAutoMode} aria-label="Toggle auto-cast" />
+                  </div>
                 </div>
                 <SpellGame ref={gameRef} />
               </div>
@@ -119,13 +153,17 @@ const Index = () => {
                     </div>
                   </div>
                 </div>
-                <FeedbackOverlay target={selected?.name || ""} result={result} listening={listening} loudness={loudness} />
-                <MicVisualizer loudness={loudness} pitchHz={pitchHz || undefined} listening={listening} />
+                <FeedbackOverlay target={overlayTarget} result={displayResult} listening={listening || auto.listening} loudness={vizLoudness} />
+                <MicVisualizer loudness={vizLoudness} pitchHz={vizPitch} listening={listening || auto.listening} />
                 <div className="flex items-center gap-3">
-                  <Button variant="hero" onClick={onCast} className="hover-scale">Speak Your Spell</Button>
-                  {listening && (
+                  <Button variant="hero" onClick={onCast} className="hover-scale" disabled={autoMode}>Speak Your Spell</Button>
+                  {listening && !autoMode && (
                     <Button variant="outline" onClick={stop}>Stop</Button>
                   )}
+                  <div className="flex items-center gap-2 ml-auto">
+                    <span className="text-sm text-muted-foreground">Auto-cast</span>
+                    <Switch checked={autoMode} onCheckedChange={setAutoMode} aria-label="Toggle auto-cast" />
+                  </div>
                 </div>
                 <SpellGame ref={gameRef} />
               </div>
@@ -135,7 +173,7 @@ const Index = () => {
 
         <aside className="lg:col-span-1 order-1 lg:order-2">
           <div className="mb-3 text-sm text-muted-foreground">Spellbook</div>
-          <SpellBook spells={spellsData} selectedId={selected?.id} onSelect={setSelected} />
+          <SpellBook spells={spellsData} selectedId={selected?.id} onSelect={setSelected} onCast={(s) => { setSelected(s); gameRef.current?.castSpell(s.element, 0.7); if (mode === 'duel') setEnemyHP((hp) => Math.max(0, hp - Math.round(0.7 * 15))); }} />
         </aside>
       </main>
     </>

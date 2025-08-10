@@ -68,4 +68,10 @@ export const SoundManager = {
   impact(element: keyof typeof elementBaseFreq, power: number) {
     playOneShot({ element, power: Math.min(1, power + 0.2), type: "square" });
   },
+  castStart(element: keyof typeof elementBaseFreq) {
+    playOneShot({ element, power: 0.4, type: "sine", adsr: { attack: 0.01, decay: 0.06, sustain: 0.2, release: 0.12 } });
+  },
+  castRelease(element: keyof typeof elementBaseFreq, power: number) {
+    playOneShot({ element, power: Math.min(1, 0.5 + power * 0.7), type: element === "lightning" ? "sawtooth" : "triangle", adsr: { attack: 0.005, decay: 0.08, sustain: 0.3, release: 0.2 } });
+  },
 };
