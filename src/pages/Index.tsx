@@ -30,6 +30,7 @@ const Index = () => {
   const [enemyHP, setEnemyHP] = useState(100);
   const [lastPlayerCast, setLastPlayerCast] = useState<{ element: Element; time: number } | null>(null);
   const [lastEnemyCast, setLastEnemyCast] = useState<{ element: Element; time: number } | null>(null);
+  const lastProcessedAutoTsRef = useRef<number>(0);
 
   // Handle errors with better UX
   useEffect(() => {
@@ -164,11 +165,13 @@ const Index = () => {
   useEffect(() => {
     const detection = auto.lastDetected;
     if (!detection) return;
+    if (lastProcessedAutoTsRef.current === detection.timestamp) return;
     
     const power = detection.power;
     const spell = detection.spell;
     
     const now = Date.now();
+    if (lastPlayerCast && spell && lastPlayerCast.element === spell.element && (now - lastPlayerCast.time) < 3000) return;
     if (lastPlayerCast && (now - lastPlayerCast.time) < 1000) return;
 
     // Check for combos
@@ -196,6 +199,7 @@ const Index = () => {
     toast.success(`Auto-cast: ${spell.name}`, { 
       description: `Accuracy: ${Math.round(detection.result.accuracy)}%` 
     });
+    lastProcessedAutoTsRef.current = detection.timestamp;
   }, [auto.lastDetected, mode, lastPlayerCast]);
 
   const resetDuel = () => {

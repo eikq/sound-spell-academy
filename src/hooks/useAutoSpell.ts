@@ -86,7 +86,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   const segmentCastedRef = useRef(false);
   const lastFinalRef = useRef<{ transcript: string; confidence: number; time: number } | null>(null);
   const shouldListenRef = useRef(false);
-
+  const lastSpellCastAtRef = useRef<Record<string, number>>({});
+  
   const minAccuracy = opts?.minAccuracy ?? 0.65; // Slightly higher threshold
   const minConfidence = opts?.minConfidence ?? 0.5;
 
@@ -248,20 +249,28 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             const score = detail.accuracy / 100;
             if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
           }
-          if (bestMatch && bestMatch.score >= minAccuracy && confidence >= minConfidence) {
-            const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
-            const result: PronunciationResult = {
-              transcript,
-              confidence,
-              accuracy: bestMatch.detail.accuracy,
-              phoneticScore: bestMatch.detail.phoneticScore,
-              loudness: peakRmsRef.current,
-              letters: bestMatch.detail.letters,
-            };
-            setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
-            lastCastAtRef.current = now;
-            lastTranscriptRef.current = normalizedTranscript;
-          }
+            const key = (bestMatch.spell as any).id ?? bestMatch.spell.name;
+            const lastAt = lastSpellCastAtRef.current[key] ?? 0;
+            if (now - lastAt >= 3000) {
+              const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
+              const result: PronunciationResult = {
+                transcript,
+                confidence,
+                accuracy: bestMatch.detail.accuracy,
+                phoneticScore: bestMatch.detail.phoneticScore,
+                loudness: peakRmsRef.current,
+                letters: bestMatch.detail.letters,
+              };
+              setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
+              lastSpellCastAtRef.current[key] = now;
+              lastCastAtRef.current = now;
+              lastTranscriptRef.current = normalizedTranscript;
+              lastFinalRef.current = null;
+            } else {
+              // Within same-spell cooldown: do not cast, but consume this segment
+              lastTranscriptRef.current = normalizedTranscript;
+              lastFinalRef.current = null;
+            }
         }
       }
       // Reset for next segment
