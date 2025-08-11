@@ -80,6 +80,12 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   const isStartingRef = useRef(false);
   const lastCastAtRef = useRef(0);
   const lastTranscriptRef = useRef("");
+  const speakingRef = useRef(false);
+  const lastVoiceAtRef = useRef(0);
+  const segmentStartedAtRef = useRef(0);
+  const segmentCastedRef = useRef(false);
+  const lastFinalRef = useRef<{ transcript: string; confidence: number; time: number } | null>(null);
+  const shouldListenRef = useRef(false);
 
   const minAccuracy = opts?.minAccuracy ?? 0.65; // Slightly higher threshold
   const minConfidence = opts?.minConfidence ?? 0.5;
@@ -211,14 +217,61 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
     const rms = Math.sqrt(sumSquares / buffer.length);
     const normalized = Math.max(0, Math.min(1, (rms - 0.015) / 0.3)); // Adjusted sensitivity
     
-    peakRmsRef.current = Math.max(peakRmsRef.current * 0.99, normalized); // Decay peak
+    peakRmsRef.current = Math.max(peakRmsRef.current * 0.98, normalized); // Decay peak slightly
     setLoudness(normalized);
     
     const freq = estimatePitch(buffer, audioCtxRef.current?.sampleRate || 44100);
     setPitchHz(freq);
+
+    // Voice Activity + Silence segmentation
+    const now = Date.now();
+    const voiceThreshold = 0.05;
+    if (normalized > voiceThreshold) {
+      if (!speakingRef.current) {
+        speakingRef.current = true;
+        segmentStartedAtRef.current = now;
+        segmentCastedRef.current = false;
+      }
+      lastVoiceAtRef.current = now;
+    } else if (speakingRef.current && now - lastVoiceAtRef.current > 1500) {
+      // Phrase ended: cast once using last final transcript if available
+      if (!segmentCastedRef.current && lastFinalRef.current && lastFinalRef.current.time >= segmentStartedAtRef.current) {
+        const { transcript, confidence } = lastFinalRef.current;
+        const normalizedTranscript = normalize(transcript);
+        const tooSoon = (now - lastCastAtRef.current) < 1000; // 1s cooldown
+        const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 2500);
+        
+        if (!tooSoon && !isDuplicate) {
+          let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
+          for (const spell of spells) {
+            const detail = computeScores(spell.name, transcript);
+            const score = detail.accuracy / 100;
+            if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
+          }
+          if (bestMatch && bestMatch.score >= minAccuracy && confidence >= minConfidence) {
+            const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
+            const result: PronunciationResult = {
+              transcript,
+              confidence,
+              accuracy: bestMatch.detail.accuracy,
+              phoneticScore: bestMatch.detail.phoneticScore,
+              loudness: peakRmsRef.current,
+              letters: bestMatch.detail.letters,
+            };
+            setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
+            lastCastAtRef.current = now;
+            lastTranscriptRef.current = normalizedTranscript;
+          }
+        }
+      }
+      // Reset for next segment
+      speakingRef.current = false;
+      segmentCastedRef.current = true;
+      peakRmsRef.current = 0;
+    }
     
     rafRef.current = requestAnimationFrame(measure);
-  }, [estimatePitch]);
+  }, [estimatePitch, spells, minAccuracy, minConfidence]);
 
   const start = useCallback(async () => {
     if (listening || isStartingRef.current) return;
@@ -246,70 +299,20 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
 
       recognition.onresult = (ev: any) => {
         const now = Date.now();
-        if (now - lastProcessTime < PROCESS_THROTTLE) return;
-        lastProcessTime = now;
-
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
           const res = ev.results[i];
           if (!res.isFinal) continue;
-
-          // Try all alternatives
+          // Choose best alternative by confidence
+          let bestAlt: { transcript: string; confidence: number } | null = null;
           for (let j = 0; j < Math.min(res.length, 3); j++) {
             const alt = res[j];
-            const transcript = String(alt.transcript || "").trim();
-            const confidence = Number(alt.confidence || 0);
-            
-            if (transcript.length < 2) continue;
-
-            // Find best matching spell
-            let bestMatch: { 
-              spell: Spell; 
-              score: number; 
-              detail: ReturnType<typeof computeScores> 
-            } | null = null;
-
-            for (const spell of spells) {
-              const detail = computeScores(spell.name, transcript);
-              const score = detail.accuracy / 100;
-              
-              if (!bestMatch || score > bestMatch.score) {
-                bestMatch = { spell, score, detail };
-              }
-            }
-
-            if (bestMatch && 
-                bestMatch.score >= minAccuracy && 
-                confidence >= minConfidence) {
-              
-              const normalizedTranscript = normalize(transcript);
-              const tooSoon = (now - lastCastAtRef.current) < 1000; // 1s cooldown
-              const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 2500);
-              if (tooSoon || isDuplicate) {
-                continue; // Skip spam/duplicates
-              }
-              
-              const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
-              const result: PronunciationResult = {
-                transcript,
-                confidence,
-                accuracy: bestMatch.detail.accuracy,
-                phoneticScore: bestMatch.detail.phoneticScore,
-                loudness: peakRmsRef.current,
-                letters: bestMatch.detail.letters,
-              };
-
-              setLastDetected({ 
-                spell: bestMatch.spell, 
-                result, 
-                power,
-                timestamp: now
-              });
-              lastCastAtRef.current = now;
-              lastTranscriptRef.current = normalizedTranscript;
-              
-              peakRmsRef.current = 0; // Reset after successful cast
-              return; // Exit after first successful match
-            }
+            const t = String(alt.transcript || "").trim();
+            const c = Number(alt.confidence || 0);
+            if (t.length < 2) continue;
+            if (!bestAlt || c > bestAlt.confidence) bestAlt = { transcript: t, confidence: c };
+          }
+          if (bestAlt) {
+            lastFinalRef.current = { transcript: bestAlt.transcript, confidence: bestAlt.confidence, time: now };
           }
         }
       };
@@ -320,21 +323,19 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
       };
 
       recognition.onend = () => {
-        if (listening) {
-          // Auto-restart if we're supposed to be listening
+        if (shouldListenRef.current && recognitionRef.current) {
           setTimeout(() => {
-            if (listening && recognitionRef.current) {
-              try {
-                recognitionRef.current.start();
-              } catch (e) {
-                console.warn("Failed to restart recognition:", e);
-              }
+            try {
+              recognitionRef.current!.start();
+            } catch (e) {
+              console.warn("Failed to restart recognition:", e);
             }
-          }, 100);
+          }, 120);
         }
       };
 
       recognitionRef.current = recognition;
+      shouldListenRef.current = true;
       setListening(true);
       recognition.start();
     } catch (e: any) {
@@ -346,6 +347,7 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   }, [listening, setupAudio, stopAudio, spells, minAccuracy, minConfidence, measure]);
 
   const stop = useCallback(() => {
+    shouldListenRef.current = false;
     setListening(false);
     if (recognitionRef.current) {
       try {
