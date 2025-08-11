@@ -168,8 +168,10 @@ const Index = () => {
     const power = detection.power;
     const spell = detection.spell;
     
-    // Check for combos
     const now = Date.now();
+    if (lastPlayerCast && (now - lastPlayerCast.time) < 1000) return;
+
+    // Check for combos
     const withinWindow = lastPlayerCast && (now - lastPlayerCast.time) <= 2500;
     const combo = resolveCombo(lastPlayerCast?.element || null, spell.element, detection.result.accuracy / 100, withinWindow || false);
     

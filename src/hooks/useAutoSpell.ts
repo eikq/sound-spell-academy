@@ -78,6 +78,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   const peakRmsRef = useRef(0);
   const recognitionRef = useRef<any>(null);
   const isStartingRef = useRef(false);
+  const lastCastAtRef = useRef(0);
+  const lastTranscriptRef = useRef("");
 
   const minAccuracy = opts?.minAccuracy ?? 0.65; // Slightly higher threshold
   const minConfidence = opts?.minConfidence ?? 0.5;
@@ -279,6 +281,13 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
                 bestMatch.score >= minAccuracy && 
                 confidence >= minConfidence) {
               
+              const normalizedTranscript = normalize(transcript);
+              const tooSoon = (now - lastCastAtRef.current) < 1000; // 1s cooldown
+              const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 2500);
+              if (tooSoon || isDuplicate) {
+                continue; // Skip spam/duplicates
+              }
+              
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
               const result: PronunciationResult = {
                 transcript,
@@ -295,6 +304,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
                 power,
                 timestamp: now
               });
+              lastCastAtRef.current = now;
+              lastTranscriptRef.current = normalizedTranscript;
               
               peakRmsRef.current = 0; // Reset after successful cast
               return; // Exit after first successful match

@@ -339,7 +339,10 @@ export const SpellGame = forwardRef<SpellGameRef>((_, ref) => {
               world.removeChild(impact);
               impact.destroy();
             }
-            trail.clear();
+            if (world.children.includes(trail)) {
+              world.removeChild(trail);
+            }
+            trail.destroy();
           }
         };
         
