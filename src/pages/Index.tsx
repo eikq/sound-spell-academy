@@ -32,6 +32,20 @@ const Index = () => {
   const [lastEnemyCast, setLastEnemyCast] = useState<{ element: Element; time: number } | null>(null);
   const lastProcessedAutoTsRef = useRef<number>(0);
 
+  // Auto-cast gating config
+  const COOLDOWN_MS = 1200; // Global cooldown between casts
+  const DEBOUNCE_MS = 300;  // Transcript stability debounce
+  const REARM_MS = 1500;    // Rearm window to allow same key again
+
+  type DebounceTimer = number | ReturnType<typeof setTimeout>;
+  const castGateRef = useRef<{ lastAt: number; lastKey: string; debounceTimer: DebounceTimer }>({
+    lastAt: 0,
+    lastKey: "",
+    debounceTimer: 0 as any,
+  });
+
+  const normalizeKey = (s: string = "") => s.toLowerCase().replace(/[^a-z]/g, "");
+
   // Handle errors with better UX
   useEffect(() => {
     if (error) {
@@ -161,49 +175,96 @@ const Index = () => {
     }
   }, [result, selected, mode, lastPlayerCast]);
 
-  // Handle auto-cast results
+  // Handle auto-cast results with debounce + cooldown + dedupe key
   useEffect(() => {
     const detection = auto.lastDetected;
     if (!detection) return;
-    if (lastProcessedAutoTsRef.current === detection.timestamp) return;
 
-    // Deduplicate immediately to avoid React StrictMode double-effect casting
-    lastProcessedAutoTsRef.current = detection.timestamp;
-    
-    const power = detection.power;
-    const spell = detection.spell;
-    
-    const now = Date.now();
-    // Same-spell cooldown: 3s
-    if (lastPlayerCast && spell && lastPlayerCast.element === spell.element && (now - lastPlayerCast.time) < 3000) return;
-    // Global minimal cooldown: 1s to avoid rapid back-to-back casts
-    if (lastPlayerCast && (now - lastPlayerCast.time) < 1000) return;
+    // Debounce transcript stability before evaluating a cast
+    if (castGateRef.current.debounceTimer) {
+      clearTimeout(castGateRef.current.debounceTimer as any);
+    }
+    castGateRef.current.debounceTimer = setTimeout(() => {
+      const { spell, power, result } = detection;
+      const now = Date.now();
 
-    // Check for combos
-    const withinWindow = lastPlayerCast && (now - lastPlayerCast.time) <= 2500;
-    const combo = resolveCombo(lastPlayerCast?.element || null, spell.element, detection.result.accuracy / 100, withinWindow || false);
-    
-    if (combo) {
-      SoundManager.combo([lastPlayerCast!.element, spell.element], power);
-      toast.success(`${combo} Auto-Combo!`, { 
-        description: `Your ${spell.name} triggered a devastating combination!` 
+      // Build dedupe key from spell + normalized transcript + charge tier
+      const chargeTier = Math.min(2, Math.floor(power * 3));
+      const key = `${spell.id}|${normalizeKey(result.transcript)}|${chargeTier}`;
+
+      const cooldownOk = now - castGateRef.current.lastAt >= COOLDOWN_MS;
+      const newKey = key !== castGateRef.current.lastKey;
+
+      // Rising-edge: only when cooldown is satisfied AND key is new
+      if (!cooldownOk) {
+        console.debug("Cast suppressed: cooldown");
+        return;
+      }
+      if (!newKey) {
+        console.debug("Cast suppressed: duplicate key");
+        return;
+      }
+
+      // Same-spell cooldown vs last player cast
+      if (
+        lastPlayerCast &&
+        spell &&
+        lastPlayerCast.element === spell.element &&
+        now - lastPlayerCast.time < 3000
+      ) {
+        console.debug("Cast suppressed: same-spell 3s cooldown");
+        return;
+      }
+      // Minimal global cooldown vs last player cast to avoid back-to-back
+      if (lastPlayerCast && now - lastPlayerCast.time < 1000) {
+        console.debug("Cast suppressed: global min cooldown");
+        return;
+      }
+
+      // Check for combos (unchanged)
+      const withinWindow = lastPlayerCast && now - lastPlayerCast.time <= 2500;
+      const combo = resolveCombo(
+        lastPlayerCast?.element || null,
+        spell.element,
+        result.accuracy / 100,
+        withinWindow || false
+      );
+
+      if (combo) {
+        SoundManager.combo([lastPlayerCast!.element, spell.element], power);
+        toast.success(`${combo} Auto-Combo!`, {
+          description: `Your ${spell.name} triggered a devastating combination!`,
+        });
+      } else {
+        SoundManager.castRelease(spell.element, power);
+      }
+
+      gameRef.current?.castSpell(spell.element, power);
+      setLastPlayerCast({ element: spell.element, time: now });
+      setSelected(spell); // Auto-select the cast spell
+
+      if (mode === "duel") {
+        const damage = Math.round(power * 15 * (combo ? 1.5 : 1));
+        setEnemyHP((hp) => Math.max(0, hp - damage));
+      }
+
+      toast.success(`Auto-cast: ${spell.name}`, {
+        description: `Accuracy: ${Math.round(result.accuracy)}%`,
       });
-    } else {
-      SoundManager.castRelease(spell.element, power);
-    }
-    
-    gameRef.current?.castSpell(spell.element, power);
-    setLastPlayerCast({ element: spell.element, time: now });
-    setSelected(spell); // Auto-select the cast spell
-    
-    if (mode === "duel") {
-      const damage = Math.round(power * 15 * (combo ? 1.5 : 1));
-      setEnemyHP((hp) => Math.max(0, hp - damage));
-    }
-    
-    toast.success(`Auto-cast: ${spell.name}`, { 
-      description: `Accuracy: ${Math.round(detection.result.accuracy)}%` 
-    });
+
+      // Arm gate
+      castGateRef.current.lastAt = now;
+      castGateRef.current.lastKey = key;
+      setTimeout(() => {
+        if (castGateRef.current.lastKey === key) castGateRef.current.lastKey = "";
+      }, REARM_MS);
+    }, DEBOUNCE_MS) as any;
+
+    return () => {
+      if (castGateRef.current.debounceTimer) {
+        clearTimeout(castGateRef.current.debounceTimer as any);
+      }
+    };
   }, [auto.lastDetected, mode, lastPlayerCast]);
 
   const resetDuel = () => {

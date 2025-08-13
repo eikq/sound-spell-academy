@@ -71,3 +71,14 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+
+---
+
+Auto-cast gating (cooldown/debounce/dedupe)
+- COOLDOWN_MS: 1200 ms – minimum time between casts
+- DEBOUNCE_MS: 300 ms – wait for transcript stability
+- REARM_MS: 1500 ms – allow same key again
+
+Location: src/pages/Index.tsx near top of component. Adjust values to tune behavior.
+
+Suppression reasons are logged to console.debug: cooldown, duplicate key, same-spell cooldown, global min cooldown.
