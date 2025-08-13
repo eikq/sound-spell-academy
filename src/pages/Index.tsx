@@ -166,12 +166,17 @@ const Index = () => {
     const detection = auto.lastDetected;
     if (!detection) return;
     if (lastProcessedAutoTsRef.current === detection.timestamp) return;
+
+    // Deduplicate immediately to avoid React StrictMode double-effect casting
+    lastProcessedAutoTsRef.current = detection.timestamp;
     
     const power = detection.power;
     const spell = detection.spell;
     
     const now = Date.now();
+    // Same-spell cooldown: 3s
     if (lastPlayerCast && spell && lastPlayerCast.element === spell.element && (now - lastPlayerCast.time) < 3000) return;
+    // Global minimal cooldown: 1s to avoid rapid back-to-back casts
     if (lastPlayerCast && (now - lastPlayerCast.time) < 1000) return;
 
     // Check for combos
@@ -199,7 +204,6 @@ const Index = () => {
     toast.success(`Auto-cast: ${spell.name}`, { 
       description: `Accuracy: ${Math.round(detection.result.accuracy)}%` 
     });
-    lastProcessedAutoTsRef.current = detection.timestamp;
   }, [auto.lastDetected, mode, lastPlayerCast]);
 
   const resetDuel = () => {
