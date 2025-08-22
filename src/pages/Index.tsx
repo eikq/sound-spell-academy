@@ -133,7 +133,7 @@ const Index = () => {
     }
     
     SoundManager.castStart(selected.element);
-    await start(selected.displayName);
+    await start(selected.name);
   };
 
   // Handle manual casting results
@@ -233,7 +233,7 @@ const Index = () => {
       if (combo) {
         SoundManager.combo([lastPlayerCast!.element, spell.element], power);
         toast.success(`${combo} Auto-Combo!`, {
-          description: `Your ${spell.displayName} triggered a devastating combination!`,
+          description: `Your ${spell.name} triggered a devastating combination!`,
         });
       } else {
         SoundManager.castRelease(spell.element, power);
@@ -248,7 +248,7 @@ const Index = () => {
         setEnemyHP((hp) => Math.max(0, hp - damage));
       }
 
-      toast.success(`Auto-cast: ${spell.displayName}`, {
+      toast.success(`Auto-cast: ${spell.name}`, {
         description: `Accuracy: ${Math.round(result.accuracy)}%`,
       });
 
@@ -276,7 +276,7 @@ const Index = () => {
   };
 
   const canonical = typeof window !== 'undefined' ? window.location.href : 'https://lovable.dev';
-  const overlayTarget = (auto.lastDetected?.spell?.displayName ?? selected?.displayName) || "";
+  const overlayTarget = (auto.lastDetected?.spell?.name ?? selected?.name) || "";
   const displayResult = auto.lastDetected?.result || result;
   const vizLoudness = autoMode ? auto.loudness : loudness;
   const vizPitch = autoMode ? auto.pitchHz || undefined : pitchHz || undefined;
@@ -423,7 +423,7 @@ const Index = () => {
 
         <aside className="lg:col-span-1 order-1 lg:order-2">
           <div className="mb-3 text-sm text-muted-foreground">
-            Spellbook {selected && `• Selected: ${selected.displayName}`}
+            Spellbook {selected && `• Selected: ${selected.name}`}
           </div>
           <SpellBook 
             spells={spellsData} 
@@ -437,7 +437,7 @@ const Index = () => {
                 if (mode === 'duel') {
                   setEnemyHP((hp) => Math.max(0, hp - 12));
                 }
-                toast.success(`${spell.displayName} cast!`, { description: "Direct spell casting" });
+                toast.success(`${spell.name} cast!`, { description: "Direct spell casting" });
               }
             }} 
           />
