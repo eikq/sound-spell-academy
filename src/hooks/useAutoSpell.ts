@@ -37,85 +37,26 @@ function letterHighlights(target: string, spoken: string) {
   return letters;
 }
 
-function computeScores(targetPhrase: string, spokenPhrase: string, aliases: string[] = [], phonemes: string[] = []) {
+function computeScores(targetPhrase: string, spokenPhrase: string) {
   const t = normalize(targetPhrase);
   const s = normalize(spokenPhrase);
 
-  // Direct name matching (weight: 0.55)
   const maxLen = Math.max(t.length, s.length) || 1;
   const charDist = distance(t, s);
-  const nameAcc = 1 - charDist / maxLen;
+  const charAcc = 1 - charDist / maxLen;
 
-  // Alias matching (weight: 0.25)
-  let aliasAcc = 0;
-  for (const alias of aliases) {
-    const aliasNorm = normalize(alias);
-    const aliasMaxLen = Math.max(aliasNorm.length, s.length) || 1;
-    const aliasDist = distance(aliasNorm, s);
-    const aliasScore = 1 - aliasDist / aliasMaxLen;
-    aliasAcc = Math.max(aliasAcc, aliasScore);
-  }
-
-  // Phoneme matching (weight: 0.20)
   const [tPh1] = doubleMetaphone(t);
   const [sPh1] = doubleMetaphone(s);
-  let phonemeAcc = 0;
-  if (tPh1 && sPh1) {
-    const maxPhLen = Math.max(tPh1.length, sPh1.length) || 1;
-    const phDist = distance(tPh1, sPh1);
-    phonemeAcc = 1 - phDist / maxPhLen;
-  }
+  const maxPhLen = Math.max(tPh1.length, sPh1.length) || 1;
+  const phDist = distance(tPh1, sPh1);
+  const phAcc = 1 - phDist / maxPhLen;
 
-  // Enhanced phoneme matching with provided phonemes
-  for (const phoneme of phonemes) {
-    const phonemeNorm = normalize(phoneme.replace(/[-]/g, ' '));
-    const [phMeta] = doubleMetaphone(phonemeNorm);
-    if (phMeta && sPh1) {
-      const pMaxLen = Math.max(phMeta.length, sPh1.length) || 1;
-      const pDist = distance(phMeta, sPh1);
-      const pScore = 1 - pDist / pMaxLen;
-      phonemeAcc = Math.max(phonemeAcc, pScore);
-    }
-  }
-
-  // Weighted final accuracy
-  const accuracy = Math.max(0, Math.min(1, 0.55 * nameAcc + 0.25 * aliasAcc + 0.20 * phonemeAcc));
+  const accuracy = Math.max(0, Math.min(1, 0.6 * charAcc + 0.4 * phAcc));
   const letters = letterHighlights(t, s);
-  return { accuracy: accuracy * 100, phoneticScore: phonemeAcc * 100, letters };
+  return { accuracy: accuracy * 100, phoneticScore: phAcc * 100, letters };
 }
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
-
-export function getBestMatch(spells: Spell[], result: { transcript: string; loudness: number; confidence: number }, displayMode: 'canon' | 'original' = 'canon') {
-  if (!result.transcript) return null;
-  
-  let bestMatch: { spell: Spell; accuracy: number; confidence: number; chargeTier: number; power: number } | null = null;
-  
-  for (const spell of spells) {
-    const aliases = (spell as any).aliases || [];
-    const phonemes = (spell as any).phonemes || [];
-    const spellName = displayMode === 'canon' ? spell.canonical : spell.displayName;
-    const detail = computeScores(spellName, result.transcript, aliases, phonemes);
-    const accuracy = detail.accuracy / 100;
-    
-    // Difficulty-based thresholds
-    const thresholds = { 1: 0.55, 2: 0.65, 3: 0.72, 4: 0.78, 5: 0.83 };
-    const threshold = thresholds[spell.difficulty] || 0.65;
-    
-    if (accuracy >= threshold && result.confidence >= 0.5) {
-      const basePower = (spell as any).basePower || 1.0;
-      const power = basePower * (0.6 + 0.4 * accuracy) * (0.9 + 0.2 * result.loudness);
-      const clampedPower = Math.max(0.4, Math.min(2.0, power));
-      const chargeTier = result.loudness > 0.7 ? 2 : result.loudness > 0.4 ? 1 : 0;
-      
-      if (!bestMatch || accuracy > bestMatch.accuracy) {
-        bestMatch = { spell, accuracy, confidence: result.confidence, chargeTier, power: clampedPower };
-      }
-    }
-  }
-  
-  return bestMatch;
-}
 
 export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; minConfidence?: number }) {
   const [listening, setListening] = useState(false);
@@ -304,14 +245,11 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
         if (!tooSoon && !isDuplicate) {
           let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
           for (const spell of spells) {
-            const aliases = (spell as any).aliases || [];
-            const phonemes = (spell as any).phonemes || [];
-            const spellName = spell.canonical || spell.displayName;
-            const detail = computeScores(spellName, transcript, aliases, phonemes);
+            const detail = computeScores(spell.name, transcript);
             const score = detail.accuracy / 100;
             if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
           }
-            const key = bestMatch.spell.id;
+            const key = (bestMatch.spell as any).id ?? bestMatch.spell.name;
             const lastAt = lastSpellCastAtRef.current[key] ?? 0;
             if (now - lastAt >= 3000) {
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
@@ -442,8 +380,6 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
     error, 
     loudness, 
     pitchHz, 
-    lastDetected,
-    getBestMatch: (result: { transcript: string; loudness: number; confidence: number }, displayMode?: 'canon' | 'original') => 
-      getBestMatch(spells, result, displayMode)
+    lastDetected 
   } as const;
 }
