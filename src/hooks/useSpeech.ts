@@ -76,29 +76,77 @@ export function useSpeechRecognition() {
   const [error, setError] = useState<string | null>(null);
   const [loudness, setLoudness] = useState(0);
   const [pitchHz, setPitchHz] = useState<number | null>(null);
+  const [micGranted, setMicGranted] = useState<boolean | null>(null); // Track mic permission
 
   const targetRef = useRef<string>("");
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const peakRmsRef = useRef(0);
   const recognitionRef = useRef<any>(null);
 
-  const setupAudio = useCallback(async () => {
+  // Check microphone permissions on component mount
+  useEffect(() => {
+    const checkMicPermission = async () => {
+      try {
+        if (navigator.permissions) {
+          const permission = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+          setMicGranted(permission.state === 'granted');
+          permission.onchange = () => {
+            setMicGranted(permission.state === 'granted');
+          };
+        }
+      } catch (e) {
+        console.warn('Cannot check microphone permission:', e);
+      }
+    };
+    checkMicPermission();
+  }, []);
+
+  const setupAudio = useCallback(async (): Promise<void> => {
     if (audioCtxRef.current) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.8;
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 44100
+        } 
+      });
+      
+      setMicGranted(true);
+      streamRef.current = stream;
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Resume audio context if suspended
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+      
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.8;
 
-    const mic = audioCtx.createMediaStreamSource(stream);
-    mic.connect(analyser);
+      const mic = audioCtx.createMediaStreamSource(stream);
+      mic.connect(analyser);
 
-    audioCtxRef.current = audioCtx;
-    analyserRef.current = analyser;
-    micSourceRef.current = mic;
+      audioCtxRef.current = audioCtx;
+      analyserRef.current = analyser;
+      micSourceRef.current = mic;
+    } catch (error: any) {
+      setMicGranted(false);
+      if (error.name === 'NotAllowedError') {
+        throw new Error('Microphone access denied. Please allow microphone access and try again.');
+      } else if (error.name === 'NotFoundError') {
+        throw new Error('No microphone found. Please check your audio devices.');
+      } else {
+        throw new Error('Failed to access microphone: ' + error.message);
+      }
+    }
   }, []);
 
   const stopAudio = useCallback(() => {
@@ -113,10 +161,13 @@ export function useSpeechRecognition() {
     analyserRef.current = null;
     if (micSourceRef.current) {
       try {
-        (micSourceRef.current.mediaStream.getTracks() || []).forEach((t) => t.stop());
-      } catch {}
-      micSourceRef.current.disconnect();
+        micSourceRef.current.disconnect();
+      } catch (e) {}
       micSourceRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
   }, []);
 
@@ -167,15 +218,15 @@ export function useSpeechRecognition() {
     const buffer = new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(buffer);
 
-    // Loudness RMS
+    // Enhanced loudness calculation
     let sumSquares = 0;
     for (let i = 0; i < buffer.length; i++) sumSquares += buffer[i] * buffer[i];
     const rms = Math.sqrt(sumSquares / buffer.length);
-    const normalized = Math.max(0, Math.min(1, (rms - 0.02) / 0.25));
+    const normalized = Math.max(0, Math.min(1, (rms - 0.01) / 0.4)); // Better sensitivity
     peakRmsRef.current = Math.max(peakRmsRef.current, normalized);
     setLoudness(normalized);
 
-    // Pitch
+    // Improved pitch estimation
     const sr = audioCtxRef.current?.sampleRate || 44100;
     const freq = estimatePitch(buffer, sr);
     setPitchHz(freq ?? null);
@@ -188,6 +239,7 @@ export function useSpeechRecognition() {
       setError(null);
       setResult(null);
       targetRef.current = targetPhrase;
+      
       await setupAudio();
       peakRmsRef.current = 0;
       measure();
@@ -195,47 +247,78 @@ export function useSpeechRecognition() {
       const SpeechRecognition =
         (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SpeechRecognition) {
-        setError("Speech Recognition not supported in this browser.");
-        return;
+        throw new Error("Speech Recognition not supported in this browser.");
       }
+      
       const recognition = new SpeechRecognition();
       recognition.lang = "en-US";
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
+      recognition.interimResults = false; // Only final results to prevent spam
+      recognition.maxAlternatives = 3; // Get multiple alternatives for better accuracy
       recognition.continuous = false;
 
       recognition.onresult = (ev: any) => {
         // FIX: Spam casting - only process final results
         for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const result = ev.results[i];
-          if (!result.isFinal) continue; // Only process finalized speech
+          const resultItem = ev.results[i];
+          if (!resultItem.isFinal) continue; // Only process finalized speech
           
-          const res = result[0];
-          const transcript = String(res.transcript || "").trim();
-          const confidence = Number(res.confidence || 0);
+          // Choose best alternative by confidence
+          let bestTranscript = "";
+          let bestConfidence = 0;
           
-          // Skip empty or very short transcripts
-          if (transcript.length < 2) continue;
+          for (let j = 0; j < Math.min(resultItem.length, 3); j++) {
+            const alternative = resultItem[j];
+            const transcript = String(alternative.transcript || "").trim();
+            const confidence = Number(alternative.confidence || 0);
+            
+            if (transcript.length >= 2 && confidence > bestConfidence) {
+              bestTranscript = transcript;
+              bestConfidence = confidence;
+            }
+          }
+          
+          // Skip if no good transcript found
+          if (!bestTranscript || bestTranscript.length < 2) continue;
           
           const { accuracy, phoneticScore, letters } = computeScores(
             targetRef.current,
-            transcript
+            bestTranscript
           );
+          
           const final: PronunciationResult = {
-            transcript,
-            confidence,
+            transcript: bestTranscript,
+            confidence: bestConfidence,
             accuracy,
             phoneticScore,
             loudness: peakRmsRef.current,
             letters,
           };
           setResult(final);
-          break; // Only process first final result
+          break; // Only process first valid final result
         }
       };
 
       recognition.onerror = (ev: any) => {
-        setError(ev.error || "Unknown error");
+        console.error("Speech recognition error:", ev.error);
+        let errorMessage = "Speech recognition error";
+        switch (ev.error) {
+          case 'no-speech':
+            errorMessage = "No speech detected. Try speaking louder or check your microphone.";
+            break;
+          case 'audio-capture':
+            errorMessage = "Audio capture failed. Check microphone permissions.";
+            break;
+          case 'not-allowed':
+            errorMessage = "Microphone access denied. Please allow microphone access.";
+            setMicGranted(false);
+            break;
+          case 'network':
+            errorMessage = "Network error. Check your internet connection.";
+            break;
+          default:
+            errorMessage = `Speech recognition error: ${ev.error}`;
+        }
+        setError(errorMessage);
       };
 
       recognition.onend = () => {
@@ -247,7 +330,8 @@ export function useSpeechRecognition() {
       setListening(true);
       recognition.start();
     } catch (e: any) {
-      setError(e?.message || "Microphone access denied");
+      console.error("Speech recognition start error:", e);
+      setError(e?.message || "Failed to start voice recognition");
       setListening(false);
       stopAudio();
     }
@@ -268,5 +352,5 @@ export function useSpeechRecognition() {
     };
   }, [stop]);
 
-  return { listening, start, stop, result, error, loudness, pitchHz } as const;
+  return { listening, start, stop, result, error, loudness, pitchHz, micGranted } as const;
 }

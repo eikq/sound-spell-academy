@@ -25,6 +25,7 @@ import FeedbackOverlay from "@/components/game/FeedbackOverlay";
 import SpellBook from "@/components/game/SpellBook";
 import CastHistory from "@/components/game/CastHistory";
 import CastingOverlay from "@/components/game/CastingOverlay";
+import MicPermissionModal from "@/components/game/MicPermissionModal";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
@@ -34,6 +35,7 @@ const GameController = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showPause, setShowPause] = useState(false);
+  const [showMicPermission, setShowMicPermission] = useState(false);
   
   // Game state
   const [selectedSpell, setSelectedSpell] = useState<Spell | null>(spellsData[0]);
@@ -105,7 +107,7 @@ const GameController = () => {
   });
   
   // Speech recognition and auto-cast
-  const { listening, start, stop, result, error, loudness, pitchHz } = useSpeechRecognition();
+  const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
   const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 100, minConfidence: 0.5 });
   
   // Spam protection
@@ -403,15 +405,23 @@ const GameController = () => {
     }
   }, [autoMode, auto, stop]);
   
-  // Error handling
+  // Error handling and mic permission
   useEffect(() => {
     if (error) {
-      toast.error(`Microphone Error: ${error}`);
+      if (error.includes('denied') || error.includes('not-allowed') || micGranted === false) {
+        setShowMicPermission(true);
+      } else {
+        toast.error(`Microphone Error: ${error}`);
+      }
     }
     if (auto.error) {
-      toast.error(`Auto-cast Error: ${auto.error}`);
+      if (auto.error.includes('denied') || auto.error.includes('microphone')) {
+        setShowMicPermission(true);
+      } else {
+        toast.error(`Auto-cast Error: ${auto.error}`);
+      }
     }
-  }, [error, auto.error]);
+  }, [error, auto.error, micGranted]);
   
   // Render current scene
   const renderScene = () => {
@@ -595,6 +605,24 @@ const GameController = () => {
           vsBot={vsBot}
         />
       )}
+      
+      {/* Mic Permission Modal */}
+      <MicPermissionModal 
+        open={showMicPermission}
+        onClose={() => setShowMicPermission(false)}
+        onRetry={async () => {
+          try {
+            // Test microphone access
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream.getTracks().forEach(track => track.stop());
+            setShowMicPermission(false);
+            toast.success("Microphone access granted!");
+          } catch (e: any) {
+            toast.error("Still unable to access microphone: " + e.message);
+          }
+        }}
+        error={error || auto.error}
+      />
     </>
   );
 };
