@@ -9,58 +9,47 @@ All colors MUST be HSL. */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 94.1%;
     --radius: 0.5rem;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
 
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 240 5.9% 10%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 95.9%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
-
-    /* New brand tokens */
-    --brand: 275 85% 60%;
-    --brand-2: 200 85% 60%;
-    --success: 142 70% 45%;
-    --success-foreground: 210 40% 98%;
-
-    /* Gradients & shadows */
-    --gradient-primary: linear-gradient(135deg, hsl(var(--brand)), hsl(var(--brand-2)));
-    --shadow-elegant: 0 10px 30px -10px hsl(var(--brand) / 0.35);
-    --shadow-glow: 0 0 40px hsl(var(--brand) / 0.45);
-
-    /* Motion */
-    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    /* Game-specific colors */
+    --fire: 14 88% 60%;
+    --ice: 199 89% 60%; 
+    --lightning: 269 95% 75%;
+    --shadow: 262 83% 17%;
+    --nature: 142 76% 36%;
+    --arcane: 292 84% 61%;
+    
+    /* UI enhancements */
+    --glass-bg: 222.2 84% 4.9% / 0.8;
+    --glass-border: 210 40% 98% / 0.1;
+    --glow-primary: 217.2 91.2% 59.8% / 0.3;
+    --gradient-primary: linear-gradient(135deg, hsl(217.2 91.2% 59.8%), hsl(269 95% 75%));
+    --gradient-fire: linear-gradient(135deg, hsl(14 88% 60%), hsl(30 80% 55%));
+    --gradient-ice: linear-gradient(135deg, hsl(199 89% 60%), hsl(220 70% 50%));
   }
 
   .dark {
@@ -114,42 +103,77 @@ All colors MUST be HSL. */
 
   body {
     @apply bg-background text-foreground;
+    background-image: radial-gradient(ellipse at center, hsl(var(--primary) / 0.1) 0%, transparent 70%);
   }
 }
 
-/* Animation utility classes & interactive styles */
-@layer utilities {
-  .story-link {
-    position: relative;
-    display: inline-block;
-  }
-  .story-link::after {
-    content: "";
-    position: absolute;
-    width: 100%;
-    transform: scaleX(0);
-    height: 2px;
-    bottom: 0;
-    left: 0;
-    background: hsl(var(--primary));
-    transform-origin: bottom right;
-    transition: transform 0.3s ease;
-  }
-  .story-link:hover::after {
-    transform: scaleX(1);
-    transform-origin: bottom left;
-  }
-
+@layer components {
   .hover-scale {
-    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    @apply transition-all duration-300 hover:scale-105 hover:shadow-xl hover:shadow-primary/20;
   }
-  .hover-scale:hover { transform: scale(1.05); }
+  
+  .glass-card {
+    @apply bg-card/80 backdrop-blur-lg border border-white/10 shadow-2xl;
+  }
+  
+  .glow-text {
+    text-shadow: 0 0 20px hsl(var(--primary) / 0.5);
+  }
+  
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+}
 
-  .pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
 
-  .bg-hero {
-    background: var(--gradient-primary);
+@keyframes pulse-glow {
+  0%, 100% { 
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
   }
+  50% { 
+    box-shadow: 0 0 40px hsl(var(--primary) / 0.6);
+  }
+}
+
+/* Spell-specific glows */
+.fire-glow { box-shadow: 0 0 30px hsl(var(--fire) / 0.4); }
+.ice-glow { box-shadow: 0 0 30px hsl(var(--ice) / 0.4); }
+.lightning-glow { box-shadow: 0 0 30px hsl(var(--lightning) / 0.4); }
+.shadow-glow { box-shadow: 0 0 30px hsl(var(--shadow) / 0.6); }
+.nature-glow { box-shadow: 0 0 30px hsl(var(--nature) / 0.4); }
+.arcane-glow { box-shadow: 0 0 30px hsl(var(--arcane) / 0.4); }
+
+/* HP/Mana bars */
+.hp-bar {
+  background: linear-gradient(90deg, hsl(120 60% 50%) 0%, hsl(60 60% 50%) 50%, hsl(0 60% 50%) 100%);
+}
+
+.mana-bar {
+  background: linear-gradient(90deg, hsl(220 70% 50%) 0%, hsl(269 95% 75%) 100%);
+}
+
+/* Mic visualizer */
+.mic-active {
+  @apply animate-pulse-glow;
+  background: var(--gradient-primary);
+}
+
+/* Loading animations */
+.loading-dots::after {
+  content: '';
+  animation: loading-dots 1.5s infinite;
+}
+
+@keyframes loading-dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
 }

@@ -143,8 +143,15 @@ const GameController = () => {
   };
   
   // NEW: Matchmaking - Start match flow
-  const handleStartMatch = async (mode: 'quick' | 'code' | 'bot', config?: any) => {
+  const handleStartMatch = async (mode: 'quick' | 'code' | 'bot' | 'cancel', config?: any) => {
     try {
+      if (mode === 'cancel') {
+        socketClient.emit('queue:cancel');
+        setIsSearching(false);
+        toast.info("Search cancelled");
+        return;
+      }
+      
       if (mode === 'bot') {
         startBotMatch(config?.botConfig || botConfig);
       } else {
@@ -278,15 +285,23 @@ const GameController = () => {
   useEffect(() => {
     const detection = auto.lastDetected;
     if (!detection) return;
-    
+
     const { spell, power, result } = detection;
     const now = Date.now();
-    
+
     if (now - castGateRef.current.lastAt < COOLDOWN_MS) return;
-    
+
     handleSpellCast(spell, result.accuracy, power, 'player');
     castGateRef.current.lastAt = now;
   }, [auto.lastDetected]);
+
+  // Cancel search when user leaves play menu
+  useEffect(() => {
+    if (currentScene !== 'menu_play' && isSearching) {
+      socketClient.emit('queue:cancel');
+      setIsSearching(false);
+    }
+  }, [currentScene, isSearching]);
   
   // Unified spell casting handler
   const handleSpellCast = (spell: Spell, accuracy: number, power: number, caster: 'player' | 'enemy') => {
@@ -322,18 +337,51 @@ const GameController = () => {
     }
   };
   
+  // Socket event listeners for matchmaking
+  useEffect(() => {
+    socketClient.on('queue:waiting', () => {
+      setIsSearching(true);
+      toast.info("Searching for opponent...");
+    });
+    
+    socketClient.on('match:found', (data) => {
+      setIsSearching(false);
+      setCurrentRoom({
+        id: data.roomId,
+        players: data.players,
+        state: 'waiting',
+        mode: 'quick',
+        vsBot: data.vsBot
+      });
+      setVsBot(data.vsBot);
+      setCurrentScene('match');
+      toast.success("Match found!");
+    });
+    
+    socketClient.on('queue:timeout', () => {
+      setIsSearching(false);
+      toast.warning("No opponent found. Try again?");
+    });
+    
+    return () => {
+      socketClient.off('queue:waiting', () => {});
+      socketClient.off('match:found', () => {});
+      socketClient.off('queue:timeout', () => {});
+    };
+  }, []);
+
   // Match cleanup
   const endMatch = () => {
     setCurrentRoom(null);
     setIsSearching(false);
     setVsBot(false);
     setMatchResult(null);
-    
+
     if (botRef.current) {
       botRef.current.stop();
       botRef.current = null;
     }
-    
+
     // Reset players
     setPlayer(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
     setOpponent(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));

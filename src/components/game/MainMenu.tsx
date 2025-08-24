@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { GameScene } from "@/types/game";
-import { Play, BookOpen, Settings, HelpCircle, LogOut } from "lucide-react";
+import { Swords, Target, Settings, HelpCircle, LogOut } from "lucide-react";
 
 interface MainMenuProps {
   onSceneChange: (scene: GameScene) => void;
@@ -15,16 +15,16 @@ export default function MainMenu({ onSceneChange, onShowSettings, onShowHelp }: 
 
   const menuItems = [
     {
-      icon: Play,
+      icon: Swords,
       title: "Play",
-      description: "Challenge others online or practice with bots",
+      description: "Enter the arena and face worthy opponents",
       onClick: () => onSceneChange('menu_play'),
       dataEvent: "menu_play"
     },
     {
-      icon: BookOpen,
+      icon: Target,
       title: "Practice",
-      description: "Master spells in safe training environment",
+      description: "Hone your magical pronunciation skills",
       onClick: () => onSceneChange('practice'),
       dataEvent: "menu_practice"
     },
@@ -45,19 +45,19 @@ export default function MainMenu({ onSceneChange, onShowSettings, onShowHelp }: 
   ];
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-hero">
+    <div className="min-h-screen flex flex-col items-center justify-center p-4">
       {/* Animated background sigils */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-32 h-32 opacity-10 animate-pulse">
+        <div className="absolute top-1/4 left-1/4 w-32 h-32 opacity-10 animate-float">
           <div className="w-full h-full rounded-full border-2 border-primary"></div>
         </div>
-        <div className="absolute top-3/4 right-1/4 w-24 h-24 opacity-10 animate-pulse" style={{ animationDelay: '1s' }}>
-          <div className="w-full h-full rounded-full border-2 border-brand"></div>
+        <div className="absolute top-3/4 right-1/4 w-24 h-24 opacity-10 animate-float" style={{ animationDelay: '1s' }}>
+          <div className="w-full h-full rounded-full border-2 border-primary"></div>
         </div>
       </div>
 
       <header className="text-center mb-12 z-10">
-        <h1 className="text-5xl md:text-7xl font-bold mb-4 bg-clip-text text-transparent bg-hero">
+        <h1 className="text-5xl md:text-7xl font-bold mb-4 glow-text">
           Arcane Diction
         </h1>
         <p className="text-lg md:text-xl text-muted-foreground max-w-2xl">
@@ -71,19 +71,18 @@ export default function MainMenu({ onSceneChange, onShowSettings, onShowHelp }: 
           return (
             <Card 
               key={item.title}
-              className={`group cursor-pointer transition-all duration-200 hover:scale-105 ${
-                selectedIndex === index ? 'ring-2 ring-primary' : ''
+              className={`glass-card hover-scale group cursor-pointer ${
+                selectedIndex === index ? 'ring-2 ring-primary animate-pulse-glow' : ''
               }`}
               onClick={item.onClick}
               data-event={item.dataEvent}
               onMouseEnter={() => setSelectedIndex(index)}
-              style={{ background: 'rgba(255, 255, 255, 0.05)', backdropFilter: 'blur(10px)' }}
             >
               <CardHeader className="text-center">
-                <div className="mx-auto mb-4 p-4 rounded-full bg-primary/10 group-hover:bg-primary/20 transition-colors">
-                  <Icon className="w-8 h-8 text-primary" />
+                <div className="mx-auto mb-4 p-6 rounded-full bg-gradient-to-br from-primary/20 to-purple-600/20 group-hover:from-primary/30 group-hover:to-purple-600/30 transition-all animate-pulse-glow">
+                  <Icon className="w-12 h-12 text-primary group-hover:scale-110 transition-transform" />
                 </div>
-                <CardTitle className="text-xl">{item.title}</CardTitle>
+                <CardTitle className="text-2xl glow-text">{item.title}</CardTitle>
                 <CardDescription>{item.description}</CardDescription>
               </CardHeader>
             </Card>

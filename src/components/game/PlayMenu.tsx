@@ -20,7 +20,11 @@ export default function PlayMenu({ onSceneChange, onStartMatch, isSearching }: P
   const [createdRoomCode, setCreatedRoomCode] = useState("");
 
   const handleQuickMatch = () => {
-    if (isSearching) return;
+    if (isSearching) {
+      // Cancel search if already searching
+      onStartMatch('cancel' as any);
+      return;
+    }
     onStartMatch('quick');
   };
 
@@ -76,22 +80,21 @@ export default function PlayMenu({ onSceneChange, onStartMatch, isSearching }: P
 
       <main className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl w-full">
         {/* Quick Match */}
-        <Card className="hover-scale">
+        <Card className="hover-scale glass-card">
           <CardHeader className="text-center">
-            <div className="mx-auto mb-4 p-4 rounded-full bg-primary/10">
+            <div className="mx-auto mb-4 p-4 rounded-full bg-primary/10 animate-pulse-glow">
               <Users className="w-8 h-8 text-primary" />
             </div>
-            <CardTitle>Quick Match</CardTitle>
+            <CardTitle className="glow-text">Quick Match</CardTitle>
             <CardDescription>Find an opponent instantly</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Button 
               onClick={handleQuickMatch}
               className="w-full"
-              disabled={isSearching}
               data-event="menu_play_quick"
             >
-              {isSearching ? "Searching..." : "Find Opponent"}
+              {isSearching ? "Cancel Search" : "Find Opponent"}
             </Button>
             {isSearching && (
               <div className="text-center text-sm text-muted-foreground">
@@ -102,7 +105,7 @@ export default function PlayMenu({ onSceneChange, onStartMatch, isSearching }: P
         </Card>
 
         {/* Friend Invite */}
-        <Card className="hover-scale">
+        <Card className="hover-scale glass-card">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4 p-4 rounded-full bg-primary/10">
               <UserPlus className="w-8 h-8 text-primary" />
@@ -154,7 +157,7 @@ export default function PlayMenu({ onSceneChange, onStartMatch, isSearching }: P
         </Card>
 
         {/* Play vs Bot */}
-        <Card className="hover-scale">
+        <Card className="hover-scale glass-card">
           <CardHeader className="text-center">
             <div className="mx-auto mb-4 p-4 rounded-full bg-primary/10">
               <Bot className="w-8 h-8 text-primary" />
