@@ -205,22 +205,33 @@ export function useSpeechRecognition() {
       recognition.continuous = false;
 
       recognition.onresult = (ev: any) => {
-        const res = ev.results[0][0];
-        const transcript = String(res.transcript || "");
-        const confidence = Number(res.confidence || 0);
-        const { accuracy, phoneticScore, letters } = computeScores(
-          targetRef.current,
-          transcript
-        );
-        const final: PronunciationResult = {
-          transcript,
-          confidence,
-          accuracy,
-          phoneticScore,
-          loudness: peakRmsRef.current,
-          letters,
-        };
-        setResult(final);
+        // FIX: Spam casting - only process final results
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const result = ev.results[i];
+          if (!result.isFinal) continue; // Only process finalized speech
+          
+          const res = result[0];
+          const transcript = String(res.transcript || "").trim();
+          const confidence = Number(res.confidence || 0);
+          
+          // Skip empty or very short transcripts
+          if (transcript.length < 2) continue;
+          
+          const { accuracy, phoneticScore, letters } = computeScores(
+            targetRef.current,
+            transcript
+          );
+          const final: PronunciationResult = {
+            transcript,
+            confidence,
+            accuracy,
+            phoneticScore,
+            loudness: peakRmsRef.current,
+            letters,
+          };
+          setResult(final);
+          break; // Only process first final result
+        }
       };
 
       recognition.onerror = (ev: any) => {

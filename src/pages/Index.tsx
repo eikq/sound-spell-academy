@@ -11,6 +11,9 @@ import { useAutoSpell } from "@/hooks/useAutoSpell";
 import FeedbackOverlay from "@/components/game/FeedbackOverlay";
 import SpellBook from "@/components/game/SpellBook";
 import MicVisualizer from "@/components/game/MicVisualizer";
+import CastHistory from "@/components/game/CastHistory";
+import QuickSettings from "@/components/game/QuickSettings";
+import CastingOverlay from "@/components/game/CastingOverlay";
 import { SoundManager } from "@/game/sound/SoundManager";
 import { resolveCombo } from "@/game/combat/systems";
 import { toast } from "sonner";
@@ -23,6 +26,23 @@ const Index = () => {
   const [autoMode, setAutoMode] = useState(false);
   const gameRef = useRef<SpellGameRef>(null);
 
+  // NEW: QoL - Additional state for improvements
+  const [micEnabled, setMicEnabled] = useState(true);
+  const [pushToTalk, setPushToTalk] = useState(false);
+  const [sensitivity, setSensitivity] = useState(0.7);
+  const [hotwordMode, setHotwordMode] = useState(false);
+  const [isCasting, setIsCasting] = useState(false);
+  const [castHistory, setCastHistory] = useState<Array<{
+    spell: Spell;
+    accuracy: number;
+    power: number;
+    timestamp: number;
+  }>>([]);
+  const [spellCooldowns, setSpellCooldowns] = useState<Record<string, {
+    remaining: number;
+    total: number;
+  }>>({});
+
   const { listening, start, stop, result, error, loudness, pitchHz } = useSpeechRecognition();
   const auto = useAutoSpell(spellsData, { minAccuracy: 0.65, minConfidence: 0.5 });
 
@@ -32,19 +52,53 @@ const Index = () => {
   const [lastEnemyCast, setLastEnemyCast] = useState<{ element: Element; time: number } | null>(null);
   const lastProcessedAutoTsRef = useRef<number>(0);
 
-  // Auto-cast gating config
+  // FIX: Spam casting - Enhanced anti-spam config
   const COOLDOWN_MS = 1200; // Global cooldown between casts
   const DEBOUNCE_MS = 300;  // Transcript stability debounce
   const REARM_MS = 1500;    // Rearm window to allow same key again
+  const ECHO_SUPPRESS_MS = 500; // Ignore identical transcripts within this window
 
   type DebounceTimer = number | ReturnType<typeof setTimeout>;
-  const castGateRef = useRef<{ lastAt: number; lastKey: string; debounceTimer: DebounceTimer }>({
+  const castGateRef = useRef<{ 
+    lastAt: number; 
+    lastKey: string; 
+    lastTranscript: string;
+    lastTranscriptAt: number;
+    debounceTimer: DebounceTimer;
+    isCasting: boolean;
+  }>({
     lastAt: 0,
     lastKey: "",
+    lastTranscript: "",
+    lastTranscriptAt: 0,
     debounceTimer: 0 as any,
+    isCasting: false,
   });
 
   const normalizeKey = (s: string = "") => s.toLowerCase().replace(/[^a-z]/g, "");
+
+  // NEW: QoL - Cooldown management
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSpellCooldowns(prev => {
+        const updated = { ...prev };
+        let hasChanges = false;
+        for (const [spellId, cooldown] of Object.entries(updated)) {
+          const newRemaining = Math.max(0, cooldown.remaining - 100);
+          if (newRemaining !== cooldown.remaining) {
+            if (newRemaining === 0) {
+              delete updated[spellId];
+            } else {
+              updated[spellId] = { ...cooldown, remaining: newRemaining };
+            }
+            hasChanges = true;
+          }
+        }
+        return hasChanges ? updated : prev;
+      });
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
 
   // Handle errors with better UX
   useEffect(() => {
@@ -131,20 +185,56 @@ const Index = () => {
       toast.info("Auto-cast is active", { description: "Turn off auto-cast to use manual casting" });
       return;
     }
+    // FIX: Spam casting - Check if already casting or on cooldown
+    if (castGateRef.current.isCasting) {
+      toast.info("Already casting a spell", { description: "Wait for current cast to complete" });
+      return;
+    }
+    if (spellCooldowns[selected.id]) {
+      toast.info("Spell on cooldown", { 
+        description: `Wait ${Math.ceil(spellCooldowns[selected.id].remaining / 1000)}s` 
+      });
+      return;
+    }
+    if (!micEnabled) {
+      toast.error("Microphone disabled", { description: "Enable microphone to cast spells" });
+      return;
+    }
+    
+    // FIX: Spam casting - Set casting state
+    castGateRef.current.isCasting = true;
+    setIsCasting(true);
     
     SoundManager.castStart(selected.element);
     await start(selected.displayName);
   };
 
-  // Handle manual casting results
+  // FIX: Spam casting + NEW: QoL - Enhanced manual casting results with echo suppression
   useEffect(() => {
     if (!result || !selected) return;
+    
+    const now = Date.now();
+    
+    // FIX: Spam casting - Echo suppression check
+    const normalizedTranscript = normalizeKey(result.transcript);
+    if (normalizedTranscript === castGateRef.current.lastTranscript && 
+        (now - castGateRef.current.lastTranscriptAt) < ECHO_SUPPRESS_MS) {
+      console.debug("Cast suppressed: echo detected");
+      castGateRef.current.isCasting = false;
+      setIsCasting(false);
+      return;
+    }
+    
+    // FIX: Spam casting - Update echo tracking
+    castGateRef.current.lastTranscript = normalizedTranscript;
+    castGateRef.current.lastTranscriptAt = now;
+    castGateRef.current.isCasting = false;
+    setIsCasting(false);
     
     const accuracy = result.accuracy / 100;
     const power = clamp01(0.75 * accuracy + 0.25 * result.loudness);
     
     // Check for combos
-    const now = Date.now();
     const withinWindow = lastPlayerCast && (now - lastPlayerCast.time) <= 2500;
     const combo = resolveCombo(lastPlayerCast?.element || null, selected.element, accuracy, withinWindow || false);
     
@@ -159,6 +249,21 @@ const Index = () => {
     
     gameRef.current?.castSpell(selected.element, power);
     setLastPlayerCast({ element: selected.element, time: now });
+    
+    // NEW: QoL - Add to cast history
+    setCastHistory(prev => [...prev, {
+      spell: selected,
+      accuracy: result.accuracy,
+      power,
+      timestamp: now
+    }]);
+    
+    // NEW: QoL - Set cooldown
+    const cooldownMs = (selected as any).cooldownMs || COOLDOWN_MS;
+    setSpellCooldowns(prev => ({
+      ...prev,
+      [selected.id]: { remaining: cooldownMs, total: cooldownMs }
+    }));
     
     if (mode === "duel") {
       const damage = Math.round(power * 15 * (combo ? 1.5 : 1));
@@ -332,23 +437,48 @@ const Index = () => {
                     variant="hero" 
                     onClick={onCast} 
                     className="hover-scale" 
-                    disabled={autoMode || isListening}
+                    disabled={autoMode || isListening || !micEnabled || !!spellCooldowns[selected?.id || ""]}
                   >
-                    {isListening ? "Listening..." : "Cast by Speaking"}
+                    {isCasting ? "Casting..." : isListening ? "Listening..." : "Cast by Speaking"}
                   </Button>
                   {isListening && !autoMode && (
                     <Button variant="outline" onClick={stop}>Stop Listening</Button>
                   )}
+                  
+                  {/* NEW: QoL - Quick settings */}
+                  <QuickSettings
+                    micEnabled={micEnabled}
+                    onMicToggle={setMicEnabled}
+                    pushToTalk={pushToTalk}
+                    onPushToTalkToggle={setPushToTalk}
+                    sensitivity={sensitivity}
+                    onSensitivityChange={setSensitivity}
+                    hotwordMode={hotwordMode}
+                    onHotwordToggle={setHotwordMode}
+                  />
+                  
                   <div className="flex items-center gap-2 ml-auto">
                     <span className="text-sm text-muted-foreground">Auto-cast</span>
                     <Switch 
                       checked={autoMode} 
                       onCheckedChange={setAutoMode} 
-                      aria-label="Toggle automatic spell casting" 
+                      aria-label="Toggle automatic spell casting"
+                      disabled={!micEnabled}
                     />
                   </div>
                 </div>
-                <SpellGame ref={gameRef} />
+                <div className="relative">
+                  <SpellGame ref={gameRef} />
+                  {/* NEW: QoL - Casting overlay */}
+                  <CastingOverlay
+                    isCasting={isCasting}
+                    spell={selected}
+                    cooldowns={spellCooldowns}
+                  />
+                </div>
+                
+                {/* NEW: QoL - Cast history */}
+                <CastHistory history={castHistory} />
               </div>
             </TabsContent>
             
@@ -394,13 +524,26 @@ const Index = () => {
                     variant="hero" 
                     onClick={onCast} 
                     className="hover-scale" 
-                    disabled={autoMode || isListening || playerHP <= 0 || enemyHP <= 0}
+                    disabled={autoMode || isListening || !micEnabled || playerHP <= 0 || enemyHP <= 0 || !!spellCooldowns[selected?.id || ""]}
                   >
-                    {isListening ? "Casting..." : "Speak Your Spell"}
+                    {isCasting ? "Casting..." : isListening ? "Casting..." : "Speak Your Spell"}
                   </Button>
                   {isListening && !autoMode && (
                     <Button variant="outline" onClick={stop}>Cancel Cast</Button>
                   )}
+                  
+                  {/* NEW: QoL - Quick settings */}
+                  <QuickSettings
+                    micEnabled={micEnabled}
+                    onMicToggle={setMicEnabled}
+                    pushToTalk={pushToTalk}
+                    onPushToTalkToggle={setPushToTalk}
+                    sensitivity={sensitivity}
+                    onSensitivityChange={setSensitivity}
+                    hotwordMode={hotwordMode}
+                    onHotwordToggle={setHotwordMode}
+                  />
+                  
                   <Button variant="outline" onClick={resetDuel} className="ml-auto">
                     New Duel
                   </Button>
@@ -410,12 +553,23 @@ const Index = () => {
                       checked={autoMode} 
                       onCheckedChange={setAutoMode} 
                       aria-label="Toggle automatic spell casting" 
-                      disabled={playerHP <= 0 || enemyHP <= 0}
+                      disabled={playerHP <= 0 || enemyHP <= 0 || !micEnabled}
                     />
                   </div>
                 </div>
                 
-                <SpellGame ref={gameRef} />
+                <div className="relative">
+                  <SpellGame ref={gameRef} />
+                  {/* NEW: QoL - Casting overlay */}
+                  <CastingOverlay
+                    isCasting={isCasting}
+                    spell={selected}
+                    cooldowns={spellCooldowns}
+                  />
+                </div>
+                
+                {/* NEW: QoL - Cast history */}
+                <CastHistory history={castHistory} />
               </div>
             </TabsContent>
           </Tabs>

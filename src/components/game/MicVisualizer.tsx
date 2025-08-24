@@ -103,8 +103,17 @@ const MicVisualizer: React.FC<MicVisualizerProps> = ({ loudness, pitchHz, listen
     <div className="relative w-full h-48 rounded-lg border bg-card/60 backdrop-blur">
       <canvas ref={canvasRef} className="w-full h-full" />
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="text-xs text-muted-foreground">
-          {listening ? "Mic active – speak clearly" : "Mic idle"}
+        <div className="text-center space-y-1">
+          <div className="text-xs text-muted-foreground">
+            {listening ? "Mic active – speak clearly" : "Mic idle"}
+          </div>
+          {/* NEW: QoL - Real-time accuracy and loudness display */}
+          {listening && (
+            <div className="text-xs text-muted-foreground/80">
+              Loudness: {Math.round(loudness * 100)}%
+              {pitchHz && ` • Pitch: ${Math.round(pitchHz)}Hz`}
+            </div>
+          )}
         </div>
       </div>
     </div>
