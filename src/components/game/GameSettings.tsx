@@ -47,6 +47,17 @@ export default function GameSettingsModal({ settings, onSettingsChange, onClose 
     setTempSettings(prev => ({ ...prev, [key]: value }));
   };
 
+  // Test microphone function
+  const testMicrophone = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+      toast.success("Microphone test successful!");
+    } catch (error) {
+      toast.error("Microphone test failed: " + (error as Error).message);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <Card className="w-full max-w-2xl max-h-[80vh] overflow-y-auto">

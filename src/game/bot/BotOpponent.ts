@@ -37,8 +37,12 @@ export class BotOpponent {
     return this.hp;
   }
   
+  // Add mana regeneration for bot
   private scheduleNextCast() {
     if (!this.isActive) return;
+    
+    // Regenerate mana over time
+    this.mana = Math.min(100, this.mana + 2); // Regen 2 mana per cast cycle
     
     const [minInterval, maxInterval] = this.config.castInterval;
     const interval = minInterval + Math.random() * (maxInterval - minInterval);
@@ -57,9 +61,24 @@ export class BotOpponent {
     // Respect global cooldown
     if (now - this.lastCastTime < 1000) return;
     
+    // Check if bot has enough mana
+    if (this.mana < 15) {
+      console.log('Bot waiting for mana to regenerate...');
+      return;
+    }
+    
     // Select random spell with some intelligence
     const spell = this.selectSpell();
     if (!spell) return;
+    
+    // Check specific spell mana cost
+    if (this.mana < spell.manaCost) {
+      console.log(`Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${this.mana}`);
+      return;
+    }
+    
+    // Consume mana
+    this.mana = Math.max(0, this.mana - spell.manaCost);
     
     // Generate bot accuracy within configured range
     const [minAcc, maxAcc] = this.config.accuracy;
@@ -70,12 +89,16 @@ export class BotOpponent {
     const power = Math.min(1.0, 0.75 * accuracy + 0.25 * loudness);
     
     this.lastCastTime = now;
+    console.log(`Bot casting ${spell.displayName} with ${Math.round(accuracy * 100)}% accuracy`);
     this.castCallback(spell, Math.round(accuracy * 100), power);
   }
   
   private selectSpell(): Spell | null {
-    // Filter spells by difficulty and preference
+    // Filter spells by difficulty, mana cost, and preference
     let availableSpells = spellsData.filter(spell => {
+      // Check mana cost first
+      if (spell.manaCost > this.mana) return false;
+      
       if (this.config.difficulty === 'easy') {
         return spell.difficulty <= 2;
       } else if (this.config.difficulty === 'medium') {

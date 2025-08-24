@@ -6,8 +6,10 @@ import { Spell } from "@/game/spells/data";
 import spellsData from "@/game/spells/data";
 import { useSpeechRecognition } from "@/hooks/useSpeech";
 import { useAutoSpell } from "@/hooks/useAutoSpell";
+import { useManaSystem } from "@/hooks/useManaSystem";
 import { SpellGame, SpellGameRef } from "@/game/SpellGame";
 import { SoundManager } from "@/game/sound/SoundManager";
+import { ComboSystem, ComboData, ELEMENTAL_REACTIONS } from "@/game/combat/ComboSystem";
 import { resolveCombo } from "@/game/combat/systems";
 import { socketClient } from "@/game/multiplayer/SocketClient";
 import { BotOpponent } from "@/game/bot/BotOpponent";
@@ -29,6 +31,8 @@ import CastHistory from "@/components/game/CastHistory";
 import CastingOverlay from "@/components/game/CastingOverlay";
 import MicPermissionModal from "@/components/game/MicPermissionModal";
 import SpellCooldownTracker from "@/components/game/SpellCooldownTracker";
+import ComboDisplay from "@/components/game/ComboDisplay";
+import MatchStats from "@/components/game/MatchStats";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
@@ -64,6 +68,20 @@ const GameController = () => {
     mana: 100,
     combo: 0,
     connected: true
+  });
+  
+  // Enhanced game state
+  const [playerCombo, setPlayerCombo] = useState<ComboData>({
+    count: 0,
+    multiplier: 1,
+    lastCastTime: 0,
+    streak: []
+  });
+  const [opponentCombo, setOpponentCombo] = useState<ComboData>({
+    count: 0,
+    multiplier: 1,
+    lastCastTime: 0,
+    streak: []
   });
   const [vsBot, setVsBot] = useState(false);
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
@@ -109,9 +127,26 @@ const GameController = () => {
     };
   });
   
-  // Speech recognition and auto-cast
+  // Speech recognition and auto-cast  
   const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
   const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 100, minConfidence: 0.5 });
+  
+  // Mana system
+  const playerMana = useManaSystem({
+    currentMana: player.mana,
+    maxMana: 100,
+    onManaChange: (newMana) => setPlayer(prev => ({ ...prev, mana: Math.round(newMana) })),
+    regenRate: 3, // 3 mana per second
+    enabled: true
+  });
+  
+  const opponentMana = useManaSystem({
+    currentMana: opponent.mana,
+    maxMana: 100,
+    onManaChange: (newMana) => setOpponent(prev => ({ ...prev, mana: Math.round(newMana) })),
+    regenRate: 2.5, // Slightly slower for opponent
+    enabled: vsBot
+  });
   
   // Spam protection
   const COOLDOWN_MS = 1200;
@@ -212,18 +247,55 @@ const GameController = () => {
   const handleBotCast = (spell: Spell, accuracy: number, power: number) => {
     if (!vsBot || !botRef.current) return;
     
+    // Check bot mana
+    if (!opponentMana.canCast(spell.manaCost)) {
+      console.log(`Bot cannot cast ${spell.displayName} - insufficient mana`);
+      return;
+    }
+    
+    // Consume bot mana
+    opponentMana.consumeMana(spell.manaCost);
+    
+    // Update opponent combo
+    const newCombo = ComboSystem.updateCombo(opponentCombo, spell, accuracy);
+    setOpponentCombo(newCombo);
+    setOpponent(prev => ({ ...prev, combo: newCombo.count }));
+    
+    // Check for elemental reaction
+    const reaction = ComboSystem.checkElementalReaction(opponentCombo.lastSpellElement, spell.element);
+    
+    // Calculate enhanced damage
+    const damageCalc = ComboSystem.calculateDamage(
+      spell.basePower * 15,
+      newCombo,
+      reaction,
+      accuracy,
+      power
+    );
+    
     SoundManager.castRelease(spell.element, power);
     gameRef.current?.castSpell(spell.element, power, 'enemy');
     
-    const damage = Math.round(power * 15);
+    // Apply damage to player
     setPlayer(prev => ({
       ...prev,
-      hp: Math.max(0, prev.hp - damage)
+      hp: Math.max(0, prev.hp - damageCalc.finalDamage)
     }));
     
-    toast(`Bot casts ${spell.displayName}!`, { 
-      description: `${accuracy}% accuracy, ${Math.round(damage)} damage` 
-    });
+    // Show reaction feedback
+    if (reaction) {
+      toast(`💥 ${reaction.name}! ${reaction.description}`, { 
+        description: `Combo x${newCombo.count} + ${reaction.name} = ${damageCalc.finalDamage} damage!`
+      });
+    } else if (newCombo.count > 1) {
+      toast(`🔥 Combo x${newCombo.count}!`, { 
+        description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
+      });
+    } else {
+      toast(`Bot casts ${spell.displayName}!`, { 
+        description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
+      });
+    }
   };
   
   // Match end conditions
@@ -256,6 +328,12 @@ const GameController = () => {
   const onCast = async () => {
     if (!selectedSpell || autoMode || !settings.micEnabled) return;
     if (castGateRef.current.isCasting) return;
+    
+    // Check mana before starting
+    if (!playerMana.canCast(selectedSpell.manaCost)) {
+      toast.error(`Not enough mana! Need ${selectedSpell.manaCost}, have ${player.mana}`);
+      return;
+    }
     
     castGateRef.current.isCasting = true;
     setIsCasting(true);
@@ -314,12 +392,39 @@ const GameController = () => {
   
   // Unified spell casting handler
   const handleSpellCast = (spell: Spell, accuracy: number, power: number, caster: 'player' | 'enemy') => {
+    // Check mana before casting
+    const manaSystem = caster === 'player' ? playerMana : opponentMana;
+    if (!manaSystem.canCast(spell.manaCost)) {
+      if (caster === 'player') {
+        toast.error(`Not enough mana! Need ${spell.manaCost}, have ${player.mana}`);
+      }
+      return;
+    }
+    
+    // Consume mana
+    manaSystem.consumeMana(spell.manaCost);
+    
     SoundManager.castRelease(spell.element, power);
     gameRef.current?.castSpell(spell.element, power, caster);
     
-    const damage = Math.round(power * 15);
-    
     if (caster === 'player') {
+      // Update player combo
+      const newCombo = ComboSystem.updateCombo(playerCombo, spell, accuracy);
+      setPlayerCombo(newCombo);
+      setPlayer(prev => ({ ...prev, combo: newCombo.count }));
+      
+      // Check for elemental reaction
+      const reaction = ComboSystem.checkElementalReaction(playerCombo.lastSpellElement, spell.element);
+      
+      // Calculate enhanced damage
+      const damageCalc = ComboSystem.calculateDamage(
+        spell.basePower * 15,
+        newCombo,
+        reaction,
+        accuracy,
+        power
+      );
+      
       // Add to cast history
       setCastHistory(prev => [...prev, {
         spell,
@@ -331,14 +436,35 @@ const GameController = () => {
       // Damage opponent
       if (currentScene === 'match') {
         if (vsBot && botRef.current) {
-          const newHP = botRef.current.takeDamage(damage);
+          const newHP = Math.max(0, opponent.hp - damageCalc.finalDamage);
+          botRef.current.takeDamage(damageCalc.finalDamage);
           setOpponent(prev => ({ ...prev, hp: newHP }));
         } else {
           setOpponent(prev => ({
             ...prev,
-            hp: Math.max(0, prev.hp - damage)
+            hp: Math.max(0, prev.hp - damageCalc.finalDamage)
           }));
         }
+        
+        // Show enhanced feedback
+        if (reaction) {
+          toast.success(`💥 ${reaction.name}! ${spell.displayName}`, { 
+            description: `Combo x${newCombo.count} + ${reaction.name} = ${damageCalc.finalDamage} damage!`
+          });
+        } else if (newCombo.count > 1) {
+          toast.success(`🔥 Combo x${newCombo.count}! ${spell.displayName}`, { 
+            description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
+          });
+        } else {
+          toast.success(`Cast ${spell.displayName}!`, { 
+            description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
+          });
+        }
+      } else {
+        // Practice mode feedback
+        toast.success(`Cast ${spell.displayName}!`, { 
+          description: `${accuracy}% accuracy, Cost: ${spell.manaCost} mana` 
+        });
       }
       
       // Set selected spell for auto-cast
@@ -396,9 +522,11 @@ const GameController = () => {
       botRef.current = null;
     }
 
-    // Reset players
+    // Reset players and combos
     setPlayer(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
     setOpponent(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
+    setPlayerCombo({ count: 0, multiplier: 1, lastCastTime: 0, streak: [] });
+    setOpponentCombo({ count: 0, multiplier: 1, lastCastTime: 0, streak: [] });
     setCastHistory([]);
   };
   
@@ -583,6 +711,30 @@ const GameController = () => {
               <SpellCooldownTracker 
                 recentCasts={castHistory}
                 cooldownMs={COOLDOWN_MS}
+              />
+            </div>
+            
+            {/* Player Combo Display */}
+            {playerCombo.count > 1 && (
+              <div className="absolute top-32 left-6 z-30">
+                <ComboDisplay combo={playerCombo} />
+              </div>
+            )}
+            
+            {/* Opponent Combo Display */}
+            {opponentCombo.count > 1 && (
+              <div className="absolute top-32 right-6 z-30">
+                <ComboDisplay combo={opponentCombo} />
+              </div>
+            )}
+            
+            {/* Match Stats */}
+            <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-30">
+              <MatchStats 
+                castHistory={castHistory}
+                matchDuration={Date.now() - (castHistory[0]?.timestamp || Date.now())}
+                playerHP={player.hp}
+                opponentHP={opponent.hp}
               />
             </div>
 
