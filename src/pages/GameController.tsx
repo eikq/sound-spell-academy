@@ -12,6 +12,8 @@ import { resolveCombo } from "@/game/combat/systems";
 import { socketClient } from "@/game/multiplayer/SocketClient";
 import { BotOpponent } from "@/game/bot/BotOpponent";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 
 // Components
 import MainMenu from "@/components/game/MainMenu";
@@ -26,6 +28,7 @@ import SpellBook from "@/components/game/SpellBook";
 import CastHistory from "@/components/game/CastHistory";
 import CastingOverlay from "@/components/game/CastingOverlay";
 import MicPermissionModal from "@/components/game/MicPermissionModal";
+import SpellCooldownTracker from "@/components/game/SpellCooldownTracker";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
@@ -190,6 +193,10 @@ const GameController = () => {
     
     setCurrentScene('match');
     toast.success(`Bot match started! Difficulty: ${config.difficulty}`);
+    
+    // Auto-enable microphone and auto-cast for matches
+    setSettings(prev => ({ ...prev, micEnabled: true }));
+    setAutoMode(true);
     
     // Start bot after a short delay
     setTimeout(() => {
@@ -357,7 +364,12 @@ const GameController = () => {
       });
       setVsBot(data.vsBot);
       setCurrentScene('match');
-      toast.success("Match found!");
+      
+      // Auto-enable microphone and auto-cast for online matches
+      setSettings(prev => ({ ...prev, micEnabled: true }));
+      setAutoMode(true);
+      
+      toast.success("Match found! Auto-cast enabled.");
     });
     
     socketClient.on('queue:timeout', () => {
@@ -518,13 +530,62 @@ const GameController = () => {
               loudness={autoMode ? auto.loudness : loudness}
               pitchHz={autoMode ? auto.pitchHz : pitchHz}
               onPause={() => setShowPause(true)}
-              onMicToggle={() => setSettings(prev => ({ ...prev, micEnabled: !prev.micEnabled }))}
+              onMicToggle={() => {
+                const newMicEnabled = !settings.micEnabled;
+                setSettings(prev => ({ ...prev, micEnabled: newMicEnabled }));
+                
+                // Start auto-cast when enabling mic in match
+                if (newMicEnabled && !autoMode) {
+                  setAutoMode(true);
+                } else if (!newMicEnabled && autoMode) {
+                  setAutoMode(false);
+                }
+              }}
               onVoiceToggle={() => setSettings(prev => ({ ...prev, voiceVolume: prev.voiceVolume > 0 ? 0 : 0.8 }))}
               micEnabled={settings.micEnabled}
               voiceEnabled={settings.voiceVolume > 0}
               vsBot={vsBot}
             />
             
+            {/* Match Casting Controls */}
+            <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-30">
+              <Card className="glass-card">
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-4">
+                    {/* Manual Cast Button (for emergency) */}
+                    <Button 
+                      onClick={onCast}
+                      disabled={!settings.micEnabled || isCasting || !selectedSpell}
+                      className="px-6 py-3"
+                      data-event="match_manual_cast"
+                    >
+                      {isCasting ? "Casting..." : listening ? "Listening..." : "Emergency Cast"}
+                    </Button>
+                    
+                    {/* Auto-cast status */}
+                    <div className={`px-3 py-2 rounded-lg text-sm ${autoMode ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                      Auto-cast: {autoMode ? 'ACTIVE' : 'OFF'}
+                    </div>
+                    
+                    {/* Current spell indicator */}
+                    {selectedSpell && (
+                      <div className="text-sm text-muted-foreground">
+                        Ready: <span className="text-primary font-medium">{selectedSpell.displayName}</span>
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Spell Cooldown Tracker */}
+            <div className="absolute bottom-6 right-6 z-30">
+              <SpellCooldownTracker 
+                recentCasts={castHistory}
+                cooldownMs={COOLDOWN_MS}
+              />
+            </div>
+
             {isCasting && (
               <CastingOverlay 
                 isCasting={isCasting}
