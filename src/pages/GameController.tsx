@@ -397,7 +397,7 @@ const GameController = () => {
             <main className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <section className="lg:col-span-2">
                 <FeedbackOverlay 
-                  target={auto.lastDetected?.spell?.displayName ?? selectedSpell?.displayName || ""} 
+                  target={(auto.lastDetected?.spell?.displayName ?? selectedSpell?.displayName) || ""} 
                   result={auto.lastDetected?.result || result} 
                   listening={listening || auto.listening} 
                   loudness={autoMode ? auto.loudness : loudness} 
@@ -468,7 +468,11 @@ const GameController = () => {
             />
             
             {isCasting && (
-              <CastingOverlay target={selectedSpell?.displayName || ""} />
+              <CastingOverlay 
+                isCasting={isCasting}
+                spell={selectedSpell}
+                cooldowns={{}}
+              />
             )}
           </div>
         );
