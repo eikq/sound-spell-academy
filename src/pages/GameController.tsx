@@ -179,33 +179,58 @@ const GameController = () => {
     isCasting: false,
   });
 
-  // CRITICAL FIX: Auto-cast system startup - this was missing!
+  // CRITICAL FIX: Auto-cast system startup - prevent infinite loops
+  const autoModeRef = useRef(autoMode);
+  const settingsRef = useRef(settings);
+  
   useEffect(() => {
-    if (autoMode && settings.micEnabled) {
-      console.log("Starting auto-cast system...");
+    autoModeRef.current = autoMode;
+    settingsRef.current = settings;
+  }, [autoMode, settings]);
+
+  useEffect(() => {
+    // Only trigger when actually changing auto mode, not on every render
+    const shouldStart = autoMode && settings.micEnabled && !auto.listening;
+    const shouldStop = (!autoMode || !settings.micEnabled) && auto.listening;
+    
+    if (shouldStart) {
+      console.log("🎤 Starting auto-cast system...");
       auto.start().then(() => {
-        console.log("Auto-cast system started successfully");
+        console.log("✅ Auto-cast system started successfully");
+        if (currentScene === 'practice' || currentScene === 'match') {
+          toast.success("🎙️ Auto-cast activated! Speak any spell name!");
+        }
       }).catch((err) => {
-        console.error("Failed to start auto-cast system:", err);
+        console.error("❌ Failed to start auto-cast system:", err);
         setAutoMode(false);
+        toast.error(`Auto-cast failed: ${err.message}`);
       });
-    } else if (!autoMode) {
-      console.log("Stopping auto-cast system...");
+    } else if (shouldStop) {
+      console.log("🔇 Stopping auto-cast system...");
       auto.stop();
     }
-  }, [autoMode, settings.micEnabled]);
+  }, [autoMode, settings.micEnabled, currentScene]); // Remove auto.listening to prevent loops
   
   const normalizeKey = (s: string = "") => s.toLowerCase().replace(/[^a-z]/g, "");
 
-  // NEW: Main Menu + Matchmaking - Scene management
+  // Scene management with proper cleanup
   const handleSceneChange = (scene: GameScene) => {
+    console.log(`🎬 Scene change: ${currentScene} → ${scene}`);
     setCurrentScene(scene);
     
-    // Stop any active recognition when leaving practice/match
-    if (scene !== 'practice' && scene !== 'match') {
+    // Handle auto-cast based on scene
+    if (scene === 'practice' || scene === 'match') {
+      // Enable auto-cast for active scenes
+      if (!autoMode && settings.micEnabled) {
+        setAutoMode(true);
+      }
+    } else {
+      // Disable for non-active scenes
+      if (autoMode) {
+        setAutoMode(false);
+      }
       stop();
       auto.stop();
-      setAutoMode(false);
     }
     
     // Reset match state when leaving
@@ -267,29 +292,54 @@ const GameController = () => {
     
     // Auto-cast will be started by the useEffect above when autoMode is set
     
-    // Start bot after a short delay
+    // Start bot after a delay and ensure proper mana system
     setTimeout(() => {
       if (botRef.current) {
         botRef.current.start((spell, accuracy, power) => {
           handleBotCast(spell, accuracy, power);
         });
-        console.log("Bot opponent started");
+        console.log("🤖 Bot opponent started");
       }
     }, 2000);
   };
   
-  // NEW: Bot Match - Handle bot casting
+  // Bot match cleanup
+  const endMatch = () => {
+    console.log("🏁 Ending match...");
+    if (botRef.current) {
+      botRef.current.stop();
+      botRef.current = null;
+    }
+    setVsBot(false);
+    setCurrentRoom(null);
+    setMatchResult(null);
+    
+    // Reset player states
+    setPlayer(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
+    setOpponent(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
+    setCastHistory([]);
+    
+    // Mana regeneration is controlled by the enabled prop in useManaSystem
+  };
+  
+  // FIXED: Bot casting with proper mana management
   const handleBotCast = (spell: Spell, accuracy: number, power: number) => {
     if (!vsBot || !botRef.current) return;
     
-    // FIXED: Check bot mana properly
+    console.log(`🤖 Bot attempting to cast ${spell.displayName} (need ${spell.manaCost}, have ${opponent.mana})`);
+    
+    // Check bot mana properly  
     if (opponent.mana < spell.manaCost) {
-      console.log(`Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${opponent.mana}`);
+      console.log(`❌ Bot cannot cast ${spell.displayName} - insufficient mana`);
       return;
     }
     
-    // FIXED: Consume bot mana directly
-    setOpponent(prev => ({ ...prev, mana: Math.max(0, prev.mana - spell.manaCost) }));
+    // Consume bot mana with proper update
+    const newBotMana = Math.max(0, opponent.mana - spell.manaCost);
+    setOpponent(prev => ({ ...prev, mana: newBotMana }));
+    opponentMana.consumeMana(spell.manaCost);
+    
+    console.log(`✅ Bot casts ${spell.displayName}! Mana: ${opponent.mana} → ${newBotMana}`);
     
     // Update opponent combo
     const newCombo = ComboSystem.updateCombo(opponentCombo, spell, accuracy);
@@ -417,25 +467,26 @@ const GameController = () => {
     }
   }, [result, selectedSpell]);
   
-  // Handle auto-cast results with pronunciation feedback - CRITICAL FIX
+  // ENHANCED Auto-cast detection with better reliability
   useEffect(() => {
-    if (!autoMode) return; // Only process when in auto mode
+    if (!autoMode || !auto.lastDetected) return;
     
     const detection = auto.lastDetected;
-    if (!detection) return;
-
-    const { spell, power, result } = detection;
+    const { spell, power, result, timestamp } = detection;
     const now = Date.now();
 
+    // Prevent duplicate processing
+    if (now - timestamp > 5000) return; // Ignore old detections
+    
     // Check cooldown to prevent spam casting
     if (now - castGateRef.current.lastAt < COOLDOWN_MS) {
-      console.log("Auto-cast blocked by cooldown");
+      console.log(`⏳ Auto-cast blocked by cooldown (${COOLDOWN_MS}ms)`);
       return;
     }
 
-    console.log(`Auto-cast detected: ${spell.displayName} (${Math.round(result.accuracy)}% accuracy)`);
+    console.log(`🎯 Auto-cast detected: ${spell.displayName} (${Math.round(result.accuracy)}% accuracy, power: ${power.toFixed(2)})`);
 
-    // Show pronunciation feedback for auto-cast too
+    // Show pronunciation feedback for auto-cast
     setPronunciationData({
       targetSpell: spell.displayName,
       userSaid: result.transcript,
@@ -446,9 +497,13 @@ const GameController = () => {
     });
     setShowPronunciationFeedback(true);
 
+    // Cast the spell
     handleSpellCast(spell, result.accuracy, power, 'player');
     castGateRef.current.lastAt = now;
-  }, [auto.lastDetected, autoMode]);
+    
+    // Update last cast spell for UI feedback
+    setLastCastSpell(spell.displayName);
+  }, [auto.lastDetected, autoMode, COOLDOWN_MS]);
 
   // Cancel search when user leaves play menu
   useEffect(() => {
@@ -583,8 +638,8 @@ const GameController = () => {
     };
   }, []);
 
-  // Match cleanup
-  const endMatch = () => {
+  // Additional match cleanup for online matches
+  const cleanupOnlineMatch = () => {
     setCurrentRoom(null);
     setIsSearching(false);
     setVsBot(false);
@@ -603,24 +658,27 @@ const GameController = () => {
     setCastHistory([]);
   };
   
-  // FIXED: Auto-mode toggle with proper error handling
+  // ENHANCED: Auto-mode toggle with proper error handling and scene awareness
   useEffect(() => {
-    if (autoMode && settings.micEnabled && currentScene === 'match') {
-      console.log("Starting auto-cast mode...");
+    // Only manage auto-cast for active scenes
+    if (currentScene !== 'practice' && currentScene !== 'match') return;
+    
+    if (autoMode && settings.micEnabled) {
+      console.log("🎯 Starting auto-cast mode...");
       stop(); // Stop manual recognition first
       auto.start().then(() => {
-        console.log("Auto-cast activated successfully!");
+        console.log("✅ Auto-cast activated successfully!");
         toast.success("🎤 Auto-cast activated! Just speak any spell name!");
       }).catch((err) => {
-        console.error("Auto-cast failed:", err);
+        console.error("❌ Auto-cast failed:", err);
         toast.error(`Failed to start auto-cast: ${err.message}`);
         setAutoMode(false);
       });
     } else if (!autoMode) {
-      console.log("Stopping auto-cast mode...");
+      console.log("🔇 Stopping auto-cast mode...");
       auto.stop();
     }
-  }, [autoMode, settings.micEnabled, currentScene]); // Added proper dependencies
+  }, [autoMode, settings.micEnabled, currentScene]);
   
   // Error handling and mic permission
   useEffect(() => {
@@ -899,6 +957,27 @@ const GameController = () => {
         <meta property="og:description" content="Revolutionary pronunciation training through magical combat. Speak clearly to cast powerful spells!" />
       </Helmet>
       
+      
+      {/* Debug Panel - DEV ONLY */}
+      {process.env.NODE_ENV === 'development' && (
+        <DebugPanel
+          currentScene={currentScene}
+          micEnabled={settings.micEnabled}
+          autoMode={autoMode}
+          listening={listening}
+          autoListening={auto.listening}
+          playerMana={player.mana}
+          botMana={opponent.mana}
+          lastDetection={auto.lastDetected}
+          onToggleAutoMode={() => setAutoMode(!autoMode)}
+          onTestCast={() => {
+            if (selectedSpell) {
+              handleSpellCast(selectedSpell, 75, 0.8, 'player');
+            }
+          }}
+        />
+      )}
+      
       {renderScene()}
       
           
@@ -969,12 +1048,12 @@ const GameController = () => {
           }}
           onQuit={() => {
             setShowPause(false);
-            endMatch();
+            cleanupOnlineMatch();
             handleSceneChange('menu');
           }}
           onRestart={vsBot ? () => {
             setShowPause(false);
-            endMatch();
+            cleanupOnlineMatch();
             startBotMatch(botConfig);
           } : undefined}
           vsBot={vsBot}
@@ -994,7 +1073,7 @@ const GameController = () => {
           }}
           onMainMenu={() => {
             setMatchResult(null);
-            endMatch();
+            cleanupOnlineMatch();
             handleSceneChange('menu');
           }}
           castHistory={castHistory}

@@ -62,6 +62,10 @@ export function useManaSystem({
   return {
     consumeMana,
     addMana,
-    canCast: (manaCost: number) => !enabled || currentMana >= manaCost
+    canCast: (manaCost: number) => !enabled || currentMana >= manaCost,
+    setEnabled: (newEnabled: boolean) => {
+      // This function doesn't actually change state, but allows calls for API consistency
+      // The enabled state should be controlled via the props.enabled parameter
+    }
   };
 }
