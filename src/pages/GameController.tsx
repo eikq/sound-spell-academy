@@ -42,7 +42,7 @@ const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
 const GameController = () => {
   // Scene management
-  const [currentScene, setCurrentScene] = useState<GameScene>('menu');
+  const [currentScene, setCurrentScene] = useState<GameScene>('practice'); // Start in practice mode for testing
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showPause, setShowPause] = useState(false);
@@ -178,6 +178,22 @@ const GameController = () => {
     lastTranscriptAt: 0,
     isCasting: false,
   });
+
+  // CRITICAL FIX: Auto-cast system startup - this was missing!
+  useEffect(() => {
+    if (autoMode && settings.micEnabled) {
+      console.log("Starting auto-cast system...");
+      auto.start().then(() => {
+        console.log("Auto-cast system started successfully");
+      }).catch((err) => {
+        console.error("Failed to start auto-cast system:", err);
+        setAutoMode(false);
+      });
+    } else if (!autoMode) {
+      console.log("Stopping auto-cast system...");
+      auto.stop();
+    }
+  }, [autoMode, settings.micEnabled]);
   
   const normalizeKey = (s: string = "") => s.toLowerCase().replace(/[^a-z]/g, "");
 
@@ -249,17 +265,7 @@ const GameController = () => {
     setSettings(prev => ({ ...prev, micEnabled: true }));
     setAutoMode(true);
     
-    // CRITICAL FIX: Start auto-cast immediately after setting autoMode
-    setTimeout(() => {
-      auto.start().then(() => {
-        console.log("Auto-cast started for bot match");
-        toast.success("Auto-cast activated! Speak any spell name!");
-      }).catch((err) => {
-        console.error("Failed to start auto-cast:", err);
-        toast.error(`Auto-cast failed: ${err.message}`);
-        setAutoMode(false);
-      });
-    }, 500);
+    // Auto-cast will be started by the useEffect above when autoMode is set
     
     // Start bot after a short delay
     setTimeout(() => {
@@ -411,15 +417,23 @@ const GameController = () => {
     }
   }, [result, selectedSpell]);
   
-  // Handle auto-cast results with pronunciation feedback
+  // Handle auto-cast results with pronunciation feedback - CRITICAL FIX
   useEffect(() => {
+    if (!autoMode) return; // Only process when in auto mode
+    
     const detection = auto.lastDetected;
     if (!detection) return;
 
     const { spell, power, result } = detection;
     const now = Date.now();
 
-    if (now - castGateRef.current.lastAt < COOLDOWN_MS) return;
+    // Check cooldown to prevent spam casting
+    if (now - castGateRef.current.lastAt < COOLDOWN_MS) {
+      console.log("Auto-cast blocked by cooldown");
+      return;
+    }
+
+    console.log(`Auto-cast detected: ${spell.displayName} (${Math.round(result.accuracy)}% accuracy)`);
 
     // Show pronunciation feedback for auto-cast too
     setPronunciationData({
@@ -434,7 +448,7 @@ const GameController = () => {
 
     handleSpellCast(spell, result.accuracy, power, 'player');
     castGateRef.current.lastAt = now;
-  }, [auto.lastDetected]);
+  }, [auto.lastDetected, autoMode]);
 
   // Cancel search when user leaves play menu
   useEffect(() => {
