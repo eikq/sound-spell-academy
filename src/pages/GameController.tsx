@@ -33,6 +33,8 @@ import MicPermissionModal from "@/components/game/MicPermissionModal";
 import SpellCooldownTracker from "@/components/game/SpellCooldownTracker";
 import ComboDisplay from "@/components/game/ComboDisplay";
 import MatchStats from "@/components/game/MatchStats";
+import CastingIndicator from "@/components/game/CastingIndicator";
+import QuickCastButton from "@/components/game/QuickCastButton";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
@@ -101,6 +103,7 @@ const GameController = () => {
     power: number;
     timestamp: number;
   }>>([]);
+  const [lastCastSpell, setLastCastSpell] = useState<string>(''); // For UI feedback
   
   // Settings
   const [settings, setSettings] = useState<GameSettings>(() => {
@@ -129,7 +132,7 @@ const GameController = () => {
   
   // Speech recognition and auto-cast  
   const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
-  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 100, minConfidence: 0.4 }); // Lower confidence for better detection
+  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 50, minConfidence: 0.3 }); // Much easier thresholds
   
   // Mana system
   const playerMana = useManaSystem({
@@ -148,9 +151,9 @@ const GameController = () => {
     enabled: vsBot
   });
   
-  // FIXED: Reduced spam protection for better responsiveness
-  const COOLDOWN_MS = 800;  // Reduced from 1200ms
-  const ECHO_SUPPRESS_MS = 300;  // Reduced from 500ms
+  // FIXED: Much more responsive spam protection
+  const COOLDOWN_MS = 400;  // Reduced from 800ms for faster casting
+  const ECHO_SUPPRESS_MS = 200;  // Reduced from 300ms
   const castGateRef = useRef<{
     lastAt: number;
     lastTranscript: string;
@@ -469,6 +472,7 @@ const GameController = () => {
       
       // Set selected spell for auto-cast
       setSelectedSpell(spell);
+      setLastCastSpell(spell.displayName); // Update for UI feedback
     }
   };
   
@@ -681,6 +685,40 @@ const GameController = () => {
               vsBot={vsBot}
             />
             
+            {/* Enhanced Casting Indicator */}
+            <CastingIndicator 
+              isListening={listening || auto.listening}
+              autoMode={autoMode}
+              micEnabled={settings.micEnabled}
+              lastSpellCast={lastCastSpell}
+              loudness={loudness}
+            />
+
+            {/* Quick Cast Panel for Manual Mode */}
+            {!autoMode && (
+              <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-30">
+                <div className="flex flex-col gap-2 p-3 bg-card/90 backdrop-blur-sm border rounded-lg shadow-lg">
+                  <div className="text-xs text-muted-foreground text-center">Quick Cast (Manual Mode)</div>
+                  <div className="flex gap-2 flex-wrap max-w-md">
+                    {spellsData.slice(0, 6).map(spell => (
+                      <QuickCastButton
+                        key={spell.id}
+                        spell={spell}
+                        onCast={(spell) => {
+                          if (playerMana.canCast(spell.manaCost)) {
+                            handleSpellCast(spell, 75, 0.8, 'player'); // Default accuracy for quick cast
+                          }
+                        }}
+                        disabled={!playerMana.canCast(spell.manaCost)}
+                        manaCost={spell.manaCost}
+                        currentMana={player.mana}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Match Casting Controls */}
             <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-30">
               <Card className="glass-card">
@@ -711,7 +749,7 @@ const GameController = () => {
                 </CardContent>
               </Card>
             </div>
-
+            
             {/* Spell Cooldown Tracker */}
             <div className="absolute bottom-6 right-6 z-30">
               <SpellCooldownTracker 

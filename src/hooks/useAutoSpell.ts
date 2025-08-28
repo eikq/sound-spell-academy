@@ -98,11 +98,11 @@ export function getBestMatch(spells: Spell[], result: { transcript: string; loud
     const detail = computeScores(spellName, result.transcript, aliases, phonemes);
     const accuracy = detail.accuracy / 100;
     
-    // Difficulty-based thresholds
-    const thresholds = { 1: 0.55, 2: 0.65, 3: 0.72, 4: 0.78, 5: 0.83 };
-    const threshold = thresholds[spell.difficulty] || 0.65;
+    // FIXED: Much easier difficulty thresholds for better user experience
+    const thresholds = { 1: 0.35, 2: 0.40, 3: 0.45, 4: 0.50, 5: 0.55 }; // Significantly lowered
+    const threshold = thresholds[spell.difficulty] || 0.40; // Lower default threshold
     
-    if (accuracy >= threshold && result.confidence >= 0.5) {
+    if (accuracy >= threshold && result.confidence >= 0.3) { // Lowered confidence requirement
       const basePower = (spell as any).basePower || 1.0;
       const power = basePower * (0.6 + 0.4 * accuracy) * (0.9 + 0.2 * result.loudness);
       const clampedPower = Math.max(0.4, Math.min(2.0, power));
@@ -147,8 +147,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   const shouldListenRef = useRef(false);
   const lastSpellCastAtRef = useRef<Record<string, number>>({});
   
-  const minAccuracy = opts?.minAccuracy ?? 0.65; // Slightly higher threshold
-  const minConfidence = opts?.minConfidence ?? 0.5;
+  const minAccuracy = opts?.minAccuracy ?? 0.40; // Much lower for easier casting
+  const minConfidence = opts?.minConfidence ?? 0.3; // Lowered confidence requirement
 
   const setupAudio = useCallback(async () => {
     if (audioCtxRef.current || isStartingRef.current) return;
@@ -298,8 +298,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
       if (!segmentCastedRef.current && lastFinalRef.current && lastFinalRef.current.time >= segmentStartedAtRef.current) {
         const { transcript, confidence } = lastFinalRef.current;
         const normalizedTranscript = normalize(transcript);
-        const tooSoon = (now - lastCastAtRef.current) < 1000; // 1s cooldown
-        const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 2500);
+        const tooSoon = (now - lastCastAtRef.current) < 500; // Reduced to 500ms for responsiveness
+        const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 1500); // Reduced duplicate window
         
         if (!tooSoon && !isDuplicate) {
           let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
@@ -311,9 +311,12 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             const score = detail.accuracy / 100;
             if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
           }
+          
+          // BUG FIX: Check if bestMatch exists before using it
+          if (bestMatch && bestMatch.score >= minAccuracy / 100 && confidence >= minConfidence) {
             const key = bestMatch.spell.id;
             const lastAt = lastSpellCastAtRef.current[key] ?? 0;
-            if (now - lastAt >= 2000) { // Reduced cooldown to 2s for better responsiveness
+            if (now - lastAt >= 1000) { // Reduced to 1s for better responsiveness
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
               const result: PronunciationResult = {
                 transcript,
@@ -333,6 +336,7 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
               lastTranscriptRef.current = normalizedTranscript;
               lastFinalRef.current = null;
             }
+          }
         }
       }
       // Reset for next segment
@@ -395,13 +399,16 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
 
       recognition.onend = () => {
         if (shouldListenRef.current && recognitionRef.current) {
+          // Reduce restart frequency to prevent lag
           setTimeout(() => {
             try {
-              recognitionRef.current!.start();
+              if (shouldListenRef.current && recognitionRef.current) {
+                recognitionRef.current.start();
+              }
             } catch (e) {
               console.warn("Failed to restart recognition:", e);
             }
-          }, 120);
+          }, 300); // Increased delay to reduce conflicts
         }
       };
 
