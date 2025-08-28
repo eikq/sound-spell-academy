@@ -1,1011 +1,497 @@
-import { useState, useEffect, useRef } from "react";
-import { Helmet } from "react-helmet-async";
-import { GameScene, MatchResult, Player, Room, BotConfig } from "@/types/game";
-import type { GameSettings } from "@/types/game";
-import { Spell } from "@/game/spells/data";
-import spellsData from "@/game/spells/data";
-import { useSpeechRecognition } from "@/hooks/useSpeech";
-import { useAutoSpell } from "@/hooks/useAutoSpell";
-import { useManaSystem } from "@/hooks/useManaSystem";
-import { SpellGame, SpellGameRef } from "@/game/SpellGame";
-import { SoundManager } from "@/game/sound/SoundManager";
-import { ComboSystem, ComboData, ELEMENTAL_REACTIONS } from "@/game/combat/ComboSystem";
-import { resolveCombo } from "@/game/combat/systems";
-import { socketClient } from "@/game/multiplayer/SocketClient";
-import { BotOpponent } from "@/game/bot/BotOpponent";
-import { toast } from "sonner";
+import { useRef, useState, useEffect, useMemo } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-
-// Components
-import MainMenu from "@/components/game/MainMenu";
-import PlayMenu from "@/components/game/PlayMenu";
-import GameSettingsModal from "@/components/game/GameSettings";
-import HelpModal from "@/components/game/HelpModal";
-import MatchHUD from "@/components/game/MatchHUD";
-import PauseMenu from "@/components/game/PauseMenu";
-import ResultsScreen from "@/components/game/ResultsScreen";
-import FeedbackOverlay from "@/components/game/FeedbackOverlay";
-import SpellBook from "@/components/game/SpellBook";
-import CastHistory from "@/components/game/CastHistory";
-import CastingOverlay from "@/components/game/CastingOverlay";
-import MicPermissionModal from "@/components/game/MicPermissionModal";
-import SpellCooldownTracker from "@/components/game/SpellCooldownTracker";
-import ComboDisplay from "@/components/game/ComboDisplay";
-import MatchStats from "@/components/game/MatchStats";
+import { Badge } from "@/components/ui/badge";
+import { Mic, MicOff, Volume2, VolumeX, Play, Pause, RotateCcw, Settings, Zap } from "lucide-react";
+import { SpellGame } from "@/game/SpellGame";
+import type { SpellGameRef } from "@/game/SpellGame";
+import MicVisualizer from "@/components/game/MicVisualizer";
+import spellsData from "@/game/spells/data";
+import type { Spell, Element } from "@/game/spells/data";
+import { useManaSystem } from "@/hooks/useManaSystem";
+import { useAutoSpell, getBestMatch } from "@/hooks/useAutoSpell";
+import { useSpeechRecognition } from "@/hooks/useSpeech";
+import { useAutoCastGate } from "@/hooks/useAutoCastGate";
+import { toast } from "sonner";
+import { Settings as SettingsComponent } from "@/components/game/Settings";
+import type { GameSettings } from "@/components/game/Settings";
 import CastingIndicator from "@/components/game/CastingIndicator";
 import QuickCastButton from "@/components/game/QuickCastButton";
 import PronunciationFeedback from "@/components/game/PronunciationFeedback";
 import DebugPanel from "@/components/game/DebugPanel";
+import { PerfHUD } from "@/components/PerfHUD";
+import type { VisualProfile } from "@/game/vfx/Profiles";
+import { getStoredProfile, setStoredProfile } from "@/game/vfx/Profiles";
 
-const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+const STARTING_MANA = 100;
+const MAX_MANA = 150;
+
+const defaultSettings: GameSettings = {
+  displayMode: 'canon',
+  minAccuracy: 0.25, // Ultra-low for easier casting
+  minConfidence: 0.2, // Ultra-low for easier casting 
+  hotwordMode: false,
+  audioGain: 1.0,
+  visualEffects: true,
+  autoRestartRecognition: true
+};
 
 const GameController = () => {
-  // Scene management
-  const [currentScene, setCurrentScene] = useState<GameScene>('menu');
-  const [showSettings, setShowSettings] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  const [showPause, setShowPause] = useState(false);
-  const [showMicPermission, setShowMicPermission] = useState(false);
-  
-  // Game state
-  const [selectedSpell, setSelectedSpell] = useState<Spell | null>(spellsData[0]);
-  const [autoMode, setAutoMode] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isCasting, setIsCasting] = useState(false);
   const gameRef = useRef<SpellGameRef>(null);
-  
-  // Match state
-  const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
-  const [player, setPlayer] = useState<Player>({
-    id: 'player',
-    nick: 'Spellcaster',
-    hp: 100,
-    mana: 100,
-    combo: 0,
-    connected: true
-  });
-  const [opponent, setOpponent] = useState<Player>({
-    id: 'opponent',
-    nick: 'Worthy Adversary',
-    hp: 100,
-    mana: 100,
-    combo: 0,
-    connected: true
-  });
-  
-  // Enhanced game state
-  const [playerCombo, setPlayerCombo] = useState<ComboData>({
-    count: 0,
-    multiplier: 1,
-    lastCastTime: 0,
-    streak: []
-  });
-  const [opponentCombo, setOpponentCombo] = useState<ComboData>({
-    count: 0,
-    multiplier: 1,
-    lastCastTime: 0,
-    streak: []
-  });
-  const [vsBot, setVsBot] = useState(false);
-  const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
-  
-  // Bot opponent
-  const botRef = useRef<BotOpponent | null>(null);
-  const [botConfig, setBotConfig] = useState<BotConfig>({
-    difficulty: 'medium',
-    accuracy: [0.65, 0.85],
-    castInterval: [1800, 2400]
-  });
-  
-  // Cast history and spam protection
-  const [castHistory, setCastHistory] = useState<Array<{
-    spell: Spell;
-    accuracy: number;
-    power: number;
-    timestamp: number;
-  }>>([]);
-  const [lastCastSpell, setLastCastSpell] = useState<string>(''); // For UI feedback
-  
-  // Pronunciation feedback state
-  const [showPronunciationFeedback, setShowPronunciationFeedback] = useState(false);
-  const [pronunciationData, setPronunciationData] = useState<{
-    targetSpell: string;
-    userSaid: string;
-    accuracy: number;
-    letters: any[];
-    confidence: number;
-    didCast: boolean;
-  } | null>(null);
-  
-  // Settings
-  const [settings, setSettings] = useState<GameSettings>(() => {
-    const saved = localStorage.getItem('arcane-settings');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.warn('Failed to parse saved settings:', e);
-      }
+  const [activeTab, setActiveTab] = useState("practice");
+  const [isGameActive, setIsGameActive] = useState(false);
+  const [playerMana, setPlayerMana] = useState(STARTING_MANA);
+  const [opponentMana, setOpponentMana] = useState(STARTING_MANA);
+  const [playerHealth, setPlayerHealth] = useState(100);
+  const [opponentHealth, setOpponentHealth] = useState(100);
+  const [autoMode, setAutoMode] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showPerfHUD, setShowPerfHUD] = useState(false);
+  const [visualProfile, setVisualProfile] = useState<VisualProfile>(getStoredProfile());
+  const modeRef = useRef<"practice" | "duel">("practice");
+  const [gameSettings, setGameSettings] = useState<GameSettings>(() => {
+    try {
+      const stored = localStorage.getItem('gameSettings');
+      return stored ? JSON.parse(stored) : defaultSettings;
+    } catch {
+      return defaultSettings;
     }
-    return {
-      language: 'en-US',
-      sensitivity: 0.7,
-      hotwordMode: false,
-      ipSafeMode: false,
-      micEnabled: true,
-      pushToTalk: false,
-      sfxVolume: 0.8,
-      musicVolume: 0.6,
-      voiceVolume: 0.8,
-      highContrast: false,
-      fontSize: 100
-    };
   });
-  
-  // Speech recognition and auto-cast  
-  const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
-  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 30, minConfidence: 0.2 }); // Ultra-easy thresholds
-  
-  // Mana system
-  const playerMana = useManaSystem({
-    currentMana: player.mana,
-    maxMana: 100,
-    onManaChange: (newMana) => setPlayer(prev => ({ ...prev, mana: Math.round(newMana) })),
-    regenRate: 3, // 3 mana per second
+
+  // Player Mana System
+  const playerManaSystem = useManaSystem({
+    currentMana: playerMana,
+    maxMana: MAX_MANA,
+    onManaChange: setPlayerMana,
+    regenRate: 3,
     enabled: true
   });
-  
-  const opponentMana = useManaSystem({
-    currentMana: opponent.mana,
-    maxMana: 100,
-    onManaChange: (newMana) => setOpponent(prev => ({ ...prev, mana: Math.round(newMana) })),
-    regenRate: 2.5, // Slightly slower for opponent
-    enabled: vsBot
-  });
-  
-  // FIXED: Much more responsive spam protection
-  const COOLDOWN_MS = 400;  // Reduced from 800ms for faster casting
-  const ECHO_SUPPRESS_MS = 200;  // Reduced from 300ms
-  const castGateRef = useRef<{
-    lastAt: number;
-    lastTranscript: string;
-    lastTranscriptAt: number;
-    isCasting: boolean;
-  }>({
-    lastAt: 0,
-    lastTranscript: "",
-    lastTranscriptAt: 0,
-    isCasting: false,
-  });
-  
-  const normalizeKey = (s: string = "") => s.toLowerCase().replace(/[^a-z]/g, "");
 
-  // NEW: Main Menu + Matchmaking - Scene management
-  const handleSceneChange = (scene: GameScene) => {
-    setCurrentScene(scene);
-    
-    // Stop any active recognition when leaving practice/match
-    if (scene !== 'practice' && scene !== 'match') {
-      stop();
-      auto.stop();
-      setAutoMode(false);
-    }
-    
-    // Reset match state when leaving
-    if (scene !== 'match' && currentRoom) {
-      endMatch();
-    }
-  };
-  
-  // NEW: Matchmaking - Start match flow
-  const handleStartMatch = async (mode: 'quick' | 'code' | 'bot' | 'cancel', config?: any) => {
-    try {
-      if (mode === 'cancel') {
-        socketClient.emit('queue:cancel');
-        setIsSearching(false);
-        toast.info("Search cancelled");
-        return;
-      }
-      
-      if (mode === 'bot') {
-        startBotMatch(config?.botConfig || botConfig);
-      } else {
-        setIsSearching(true);
-        await socketClient.connect();
-        
-        socketClient.emit('queue:join', {
-          mode,
-          roomCode: config?.roomCode,
-          nick: player.nick
-        });
-      }
-    } catch (error) {
-      toast.error("Failed to start match: " + (error as Error).message);
-      setIsSearching(false);
-    }
-  };
-  
-  // NEW: Bot Match - Start bot battle
-  const startBotMatch = (config: BotConfig) => {
-    setBotConfig(config);
-    setVsBot(true);
-    setOpponent({
-      id: 'bot',
-      nick: `AI ${config.difficulty.charAt(0).toUpperCase() + config.difficulty.slice(1)}`,
-      hp: 100,
-      mana: 100,
-      combo: 0,
-      connected: true
-    });
-    
-    // Create bot opponent
-    botRef.current = new BotOpponent(config);
-    
-    setCurrentScene('match');
-    toast.success(`Bot match started! Difficulty: ${config.difficulty}`);
-    
-    // Auto-enable microphone and auto-cast for matches
-    setSettings(prev => ({ ...prev, micEnabled: true }));
-    setAutoMode(true);
-    
-    // CRITICAL FIX: Start auto-cast immediately after setting autoMode
-    setTimeout(() => {
-      auto.start().then(() => {
-        console.log("Auto-cast started for bot match");
-        toast.success("Auto-cast activated! Speak any spell name!");
-      }).catch((err) => {
-        console.error("Failed to start auto-cast:", err);
-        toast.error(`Auto-cast failed: ${err.message}`);
-        setAutoMode(false);
-      });
-    }, 500);
-    
-    // Start bot after a short delay
-    setTimeout(() => {
-      if (botRef.current) {
-        botRef.current.start((spell, accuracy, power) => {
-          handleBotCast(spell, accuracy, power);
-        });
-        console.log("Bot opponent started");
-      }
-    }, 2000);
-  };
-  
-  // NEW: Bot Match - Handle bot casting
-  const handleBotCast = (spell: Spell, accuracy: number, power: number) => {
-    if (!vsBot || !botRef.current) return;
-    
-    // FIXED: Check bot mana properly
-    if (opponent.mana < spell.manaCost) {
-      console.log(`Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${opponent.mana}`);
-      return;
-    }
-    
-    // FIXED: Consume bot mana directly
-    setOpponent(prev => ({ ...prev, mana: Math.max(0, prev.mana - spell.manaCost) }));
-    
-    // Update opponent combo
-    const newCombo = ComboSystem.updateCombo(opponentCombo, spell, accuracy);
-    setOpponentCombo(newCombo);
-    setOpponent(prev => ({ ...prev, combo: newCombo.count }));
-    
-    // Check for elemental reaction
-    const reaction = ComboSystem.checkElementalReaction(opponentCombo.lastSpellElement, spell.element);
-    
-    // Calculate enhanced damage
-    const damageCalc = ComboSystem.calculateDamage(
-      spell.basePower * 15,
-      newCombo,
-      reaction,
-      accuracy,
+  // Opponent Mana System (for bot fights)
+  const opponentManaSystem = useManaSystem({
+    currentMana: opponentMana,
+    maxMana: MAX_MANA,
+    onManaChange: setOpponentMana,
+    regenRate: 2.5,
+    enabled: isGameActive
+  });
+
+  // Auto-cast gate system
+  const { tryCast } = useAutoCastGate({
+    cooldownMs: 1200,
+    debounceMs: 300,
+    rearmMs: 1500,
+    minAccuracy: gameSettings.minAccuracy,
+    minConfidence: gameSettings.minConfidence
+  });
+
+  // Auto-cast system
+  const { 
+    listening: autoListening, 
+    lastDetected, 
+    start: startAuto, 
+    stop: stopAuto,
+    error: autoError 
+  } = useAutoSpell(spellsData, {
+    minAccuracy: gameSettings.minAccuracy,
+    minConfidence: gameSettings.minConfidence
+  });
+
+  // Manual speech recognition for practice
+  const { 
+    listening: manualListening, 
+    start: startManual, 
+    stop: stopManual, 
+    result: manualResult,
+    error: manualError,
+    loudness: manualLoudness
+  } = useSpeechRecognition();
+
+  // Update mode reference
+  useEffect(() => {
+    modeRef.current = activeTab as "practice" | "duel";
+  }, [activeTab]);
+
+  // Auto-cast with gate system
+  useEffect(() => {
+    if (!autoMode || !lastDetected) return;
+
+    const { spell, result, power } = lastDetected;
+    const best = {
+      spellId: spell.id,
+      element: spell.element,
+      accuracy: result.accuracy / 100,
+      confidence: result.confidence,
+      chargeTier: (result.loudness > 0.7 ? 2 : result.loudness > 0.4 ? 1 : 0) as 0|1|2,
       power
-    );
-    
-    SoundManager.castRelease(spell.element, power);
-    gameRef.current?.castSpell(spell.element, power, 'enemy');
-    
-    // Apply damage to player
-    setPlayer(prev => ({
-      ...prev,
-      hp: Math.max(0, prev.hp - damageCalc.finalDamage)
-    }));
-    
-    // Show reaction feedback
-    if (reaction) {
-      toast(`💥 ${reaction.name}! ${reaction.description}`, { 
-        description: `Combo x${newCombo.count} + ${reaction.name} = ${damageCalc.finalDamage} damage!`
-      });
-    } else if (newCombo.count > 1) {
-      toast(`🔥 Combo x${newCombo.count}!`, { 
-        description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
-      });
-    } else {
-      toast(`Bot casts ${spell.displayName}!`, { 
-        description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
-      });
-    }
-  };
-  
-  // Match end conditions
-  useEffect(() => {
-    if (currentScene === 'match') {
-      if (player.hp <= 0 || opponent.hp <= 0) {
-        const winner = player.hp > 0 ? 'player' : (vsBot ? 'bot' : 'enemy');
-        const avgAccuracy = castHistory.length > 0 
-          ? castHistory.reduce((sum, cast) => sum + cast.accuracy, 0) / castHistory.length
-          : 0;
-        
-        setMatchResult({
-          winner: winner as any,
-          accuracy: avgAccuracy,
-          totalCasts: castHistory.length,
-          matchDuration: Date.now() - (castHistory[0]?.timestamp || Date.now())
-        });
-        
-        // Stop bot
-        if (botRef.current) {
-          botRef.current.stop();
-        }
-        
-        toast.success(winner === 'player' ? '🎉 Victory!' : '💀 Defeat!');
-      }
-    }
-  }, [player.hp, opponent.hp, currentScene, castHistory, vsBot]);
-  
-  // Cast spell (manual mode)
-  const onCast = async () => {
-    if (!selectedSpell || autoMode || !settings.micEnabled) return;
-    if (castGateRef.current.isCasting) return;
-    
-    // Check mana before starting
-    if (!playerMana.canCast(selectedSpell.manaCost)) {
-      toast.error(`Not enough mana! Need ${selectedSpell.manaCost}, have ${player.mana}`);
-      return;
-    }
-    
-    castGateRef.current.isCasting = true;
-    setIsCasting(true);
-    
-    SoundManager.castStart(selectedSpell.element);
-    await start(selectedSpell.displayName);
-  };
-  
-  // Handle manual cast results with pronunciation feedback
-  useEffect(() => {
-    if (!result || !selectedSpell) return;
-    
-    const now = Date.now();
-    const normalizedTranscript = normalizeKey(result.transcript);
-    
-    // FIX: Spam casting - Echo suppression
-    if (normalizedTranscript === castGateRef.current.lastTranscript && 
-        (now - castGateRef.current.lastTranscriptAt) < ECHO_SUPPRESS_MS) {
-      castGateRef.current.isCasting = false;
-      setIsCasting(false);
-      return;
-    }
-    
-    castGateRef.current.lastTranscript = normalizedTranscript;
-    castGateRef.current.lastTranscriptAt = now;
-    castGateRef.current.isCasting = false;
-    setIsCasting(false);
-    
-    const accuracy = result.accuracy / 100;
-    const power = clamp01(0.75 * accuracy + 0.25 * result.loudness);
-    
-    // Show pronunciation feedback regardless of whether spell casts
-    const didCast = accuracy >= 0.15; // Cast with very low accuracy!
-    setPronunciationData({
-      targetSpell: selectedSpell.displayName,
-      userSaid: result.transcript,
-      accuracy: result.accuracy,
-      letters: result.letters,
-      confidence: result.confidence,
-      didCast
-    });
-    setShowPronunciationFeedback(true);
-    
-    if (didCast) {
-      handleSpellCast(selectedSpell, result.accuracy, power, 'player');
-    }
-  }, [result, selectedSpell]);
-  
-  // Handle auto-cast results with pronunciation feedback
-  useEffect(() => {
-    const detection = auto.lastDetected;
-    if (!detection) return;
-
-    const { spell, power, result } = detection;
-    const now = Date.now();
-
-    if (now - castGateRef.current.lastAt < COOLDOWN_MS) return;
-
-    // Show pronunciation feedback for auto-cast too
-    setPronunciationData({
-      targetSpell: spell.displayName,
-      userSaid: result.transcript,
-      accuracy: result.accuracy,
-      letters: result.letters,
-      confidence: result.confidence,
-      didCast: true
-    });
-    setShowPronunciationFeedback(true);
-
-    handleSpellCast(spell, result.accuracy, power, 'player');
-    castGateRef.current.lastAt = now;
-  }, [auto.lastDetected]);
-
-  // Cancel search when user leaves play menu
-  useEffect(() => {
-    if (currentScene !== 'menu_play' && isSearching) {
-      socketClient.emit('queue:cancel');
-      setIsSearching(false);
-    }
-  }, [currentScene, isSearching]);
-  
-  // Unified spell casting handler
-  const handleSpellCast = (spell: Spell, accuracy: number, power: number, caster: 'player' | 'enemy') => {
-    // FIXED: Check mana before casting
-    if (!playerMana.canCast(spell.manaCost)) {
-      console.log(`Player cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${player.mana}`);
-      if (caster === 'player') {
-        toast.error(`Not enough mana! Need ${spell.manaCost}, have ${player.mana}`);
-      }
-      return;
-    }
-    
-    console.log(`${caster} casting ${spell.displayName} (${Math.round(accuracy)}% accuracy, ${spell.manaCost} mana)`);
-    
-    // FIXED: Consume mana directly for player
-    if (caster === 'player') {
-      playerMana.consumeMana(spell.manaCost);
-    }
-    
-    SoundManager.castRelease(spell.element, power);
-    gameRef.current?.castSpell(spell.element, power, caster);
-    
-    if (caster === 'player') {
-      // Update player combo
-      const newCombo = ComboSystem.updateCombo(playerCombo, spell, accuracy);
-      setPlayerCombo(newCombo);
-      setPlayer(prev => ({ ...prev, combo: newCombo.count }));
-      
-      // Check for elemental reaction
-      const reaction = ComboSystem.checkElementalReaction(playerCombo.lastSpellElement, spell.element);
-      
-      // Calculate enhanced damage
-      const damageCalc = ComboSystem.calculateDamage(
-        spell.basePower * 15,
-        newCombo,
-        reaction,
-        accuracy,
-        power
-      );
-      
-      // Add to cast history
-      setCastHistory(prev => [...prev, {
-        spell,
-        accuracy,
-        power,
-        timestamp: Date.now()
-      }]);
-      
-      // Damage opponent
-      if (currentScene === 'match') {
-        if (vsBot && botRef.current) {
-          const newHP = Math.max(0, opponent.hp - damageCalc.finalDamage);
-          botRef.current.takeDamage(damageCalc.finalDamage);
-          setOpponent(prev => ({ ...prev, hp: newHP }));
-        } else {
-          setOpponent(prev => ({
-            ...prev,
-            hp: Math.max(0, prev.hp - damageCalc.finalDamage)
-          }));
-        }
-        
-        // Show enhanced feedback
-        if (reaction) {
-          toast.success(`💥 ${reaction.name}! ${spell.displayName}`, { 
-            description: `Combo x${newCombo.count} + ${reaction.name} = ${damageCalc.finalDamage} damage!`
-          });
-        } else if (newCombo.count > 1) {
-          toast.success(`🔥 Combo x${newCombo.count}! ${spell.displayName}`, { 
-            description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
-          });
-        } else {
-          toast.success(`Cast ${spell.displayName}!`, { 
-            description: `${accuracy}% accuracy, ${damageCalc.finalDamage} damage` 
-          });
-        }
-      } else {
-        // Practice mode feedback
-        toast.success(`Cast ${spell.displayName}!`, { 
-          description: `${accuracy}% accuracy, Cost: ${spell.manaCost} mana` 
-        });
-      }
-      
-      // Set selected spell for auto-cast
-      setSelectedSpell(spell);
-      setLastCastSpell(spell.displayName); // Update for UI feedback
-    }
-  };
-  
-  // Socket event listeners for matchmaking
-  useEffect(() => {
-    socketClient.on('queue:waiting', () => {
-      setIsSearching(true);
-      toast.info("Searching for opponent...");
-    });
-    
-    socketClient.on('match:found', (data) => {
-      setIsSearching(false);
-      setCurrentRoom({
-        id: data.roomId,
-        players: data.players,
-        state: 'waiting',
-        mode: 'quick',
-        vsBot: data.vsBot
-      });
-      setVsBot(data.vsBot);
-      setCurrentScene('match');
-      
-      // Auto-enable microphone and auto-cast for online matches
-      setSettings(prev => ({ ...prev, micEnabled: true }));
-      setAutoMode(true);
-      
-      toast.success("Match found! Auto-cast enabled.");
-    });
-    
-    socketClient.on('queue:timeout', () => {
-      setIsSearching(false);
-      toast.warning("No opponent found. Try again?");
-    });
-    
-    return () => {
-      socketClient.off('queue:waiting', () => {});
-      socketClient.off('match:found', () => {});
-      socketClient.off('queue:timeout', () => {});
     };
-  }, []);
 
-  // Match cleanup
-  const endMatch = () => {
-    setCurrentRoom(null);
-    setIsSearching(false);
-    setVsBot(false);
-    setMatchResult(null);
+    tryCast(modeRef.current, result, best, () => {
+      const manaCost = 10 + (spell.difficulty * 5);
+      if (playerManaSystem.consumeMana(manaCost)) {
+        gameRef.current?.castSpell(spell.element as Element, power, "player");
+        toast.success(`Cast ${spell.displayName}! (Power: ${Math.round(power * 100)}%)`);
+      } else {
+        toast.error("Not enough mana!");
+      }
+    });
+  }, [lastDetected, autoMode, tryCast, playerManaSystem]);
 
-    if (botRef.current) {
-      botRef.current.stop();
-      botRef.current = null;
+  // Auto mode toggle handler
+  const handleAutoToggle = async () => {
+    console.log("Auto mode toggle:", !autoMode);
+    
+    if (!autoMode) {
+      try {
+        await startAuto();
+        setAutoMode(true);
+        toast.success("Voice casting enabled! Try saying spell names.");
+      } catch (error: any) {
+        console.error("Failed to start auto mode:", error);
+        toast.error(error.message || "Failed to start voice recognition");
+      }
+    } else {
+      stopAuto();
+      setAutoMode(false);
+      toast.info("Voice casting disabled");
     }
-
-    // Reset players and combos
-    setPlayer(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
-    setOpponent(prev => ({ ...prev, hp: 100, mana: 100, combo: 0 }));
-    setPlayerCombo({ count: 0, multiplier: 1, lastCastTime: 0, streak: [] });
-    setOpponentCombo({ count: 0, multiplier: 1, lastCastTime: 0, streak: [] });
-    setCastHistory([]);
   };
-  
-  // FIXED: Auto-mode toggle with proper error handling
+
+  // Keyboard shortcuts
   useEffect(() => {
-    if (autoMode && settings.micEnabled && currentScene === 'match') {
-      console.log("Starting auto-cast mode...");
-      stop(); // Stop manual recognition first
-      auto.start().then(() => {
-        console.log("Auto-cast activated successfully!");
-        toast.success("🎤 Auto-cast activated! Just speak any spell name!");
-      }).catch((err) => {
-        console.error("Auto-cast failed:", err);
-        toast.error(`Failed to start auto-cast: ${err.message}`);
-        setAutoMode(false);
-      });
-    } else if (!autoMode) {
-      console.log("Stopping auto-cast mode...");
-      auto.stop();
-    }
-  }, [autoMode, settings.micEnabled, currentScene]); // Added proper dependencies
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F3') {
+        e.preventDefault();
+        setShowPerfHUD(prev => !prev);
+      } else if (e.key === 'F10') {
+        e.preventDefault();
+        const profiles: VisualProfile[] = ["low", "medium", "high", "ultra"];
+        const currentIndex = profiles.indexOf(visualProfile);
+        const nextIndex = Math.max(0, currentIndex - 1);
+        const newProfile = profiles[nextIndex];
+        setVisualProfile(newProfile);
+        setStoredProfile(newProfile);
+        // Visual profile will be handled by SpellGame internally
+      } else if (e.key === 'F11') {
+        e.preventDefault();
+        const profiles: VisualProfile[] = ["low", "medium", "high", "ultra"];
+        const currentIndex = profiles.indexOf(visualProfile);
+        const nextIndex = Math.min(profiles.length - 1, currentIndex + 1);
+        const newProfile = profiles[nextIndex];
+        setVisualProfile(newProfile);
+        setStoredProfile(newProfile);
+        // Visual profile will be handled by SpellGame internally
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [visualProfile]);
+
+  const handleProfileChange = (profile: VisualProfile) => {
+    setVisualProfile(profile);
+    setStoredProfile(profile);
+    // Visual profile will be handled by SpellGame internally
+  };
+
+  // Bot fighting system
+  const botIntervalRef = useRef<NodeJS.Timeout>();
   
-  // Error handling and mic permission
+  const startBotFight = () => {
+    setIsGameActive(true);
+    setOpponentHealth(100);
+    setOpponentMana(MAX_MANA);
+    
+    // Bot casts spell every 3-5 seconds
+    botIntervalRef.current = setInterval(() => {
+      if (opponentHealth <= 0 || playerHealth <= 0) return;
+      
+      const randomSpell = spellsData[Math.floor(Math.random() * spellsData.length)];
+      const manaCost = 10 + (randomSpell.difficulty * 5);
+      
+      if (opponentManaSystem.consumeMana(manaCost)) {
+        gameRef.current?.castSpell(randomSpell.element as Element, 0.8, "enemy");
+        const damage = Math.floor(15 + Math.random() * 20);
+        setPlayerHealth(prev => Math.max(0, prev - damage));
+        toast.info(`Bot casts ${randomSpell.displayName}! (-${damage} HP)`);
+      }
+    }, 3000 + Math.random() * 2000);
+  };
+
+  const stopBotFight = () => {
+    setIsGameActive(false);
+    if (botIntervalRef.current) {
+      clearInterval(botIntervalRef.current);
+      botIntervalRef.current = undefined;
+    }
+  };
+
+  // Game state management
+  const resetGame = () => {
+    setPlayerHealth(100);
+    setPlayerMana(STARTING_MANA);
+    setOpponentHealth(100);
+    setOpponentMana(STARTING_MANA);
+    stopBotFight();
+  };
+
+  const handleQuickCast = (spell: Spell) => {
+    const manaCost = 10 + (spell.difficulty * 5);
+    if (playerManaSystem.consumeMana(manaCost)) {
+      gameRef.current?.castSpell(spell.element as Element, 0.8, "player");
+      toast.success(`Cast ${spell.displayName}!`);
+      
+      if (isGameActive) {
+        const damage = Math.floor(spell.basePower * 20);
+        setOpponentHealth(prev => Math.max(0, prev - damage));
+      }
+    } else {
+      toast.error("Not enough mana!");
+    }
+  };
+
+  const handleSettingsChange = (newSettings: GameSettings) => {
+    setGameSettings(newSettings);
+    localStorage.setItem('gameSettings', JSON.stringify(newSettings));
+    setShowSettings(false);
+    toast.success("Settings saved!");
+  };
+
+  const commonSpells = useMemo(() => 
+    spellsData.filter(spell => spell.difficulty <= 2).slice(0, 6)
+  , []);
+
+  const renderQuickCastButtons = () => (
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+      {commonSpells.map((spell) => (
+        <QuickCastButton
+          key={spell.id}
+          spell={spell}
+          onCast={handleQuickCast}
+          disabled={!playerManaSystem.canCast(10 + spell.difficulty * 5)}
+          manaCost={10 + spell.difficulty * 5}
+          currentMana={playerMana}
+        />
+      ))}
+    </div>
+  );
+
+  // Start auto-cast automatically when entering bot match
   useEffect(() => {
-    if (error) {
-      if (error.includes('denied') || error.includes('not-allowed') || micGranted === false) {
-        setShowMicPermission(true);
-      } else {
-        toast.error(`Microphone Error: ${error}`);
-      }
+    if (activeTab === "duel" && isGameActive && !autoMode) {
+      console.log("Auto-starting voice for duel mode");
+      handleAutoToggle();
     }
-    if (auto.error) {
-      if (auto.error.includes('denied') || auto.error.includes('microphone')) {
-        setShowMicPermission(true);
-      } else {
-        toast.error(`Auto-cast Error: ${auto.error}`);
-      }
+  }, [activeTab, isGameActive]);
+
+  // Auto-start for practice mode when toggled on
+  useEffect(() => {
+    if (activeTab === "practice" && autoMode && !autoListening) {
+      console.log("Ensuring auto-cast is running for practice mode");
+      startAuto();
     }
-  }, [error, auto.error, micGranted]);
-  
-  // Render current scene
-  const renderScene = () => {
-    switch (currentScene) {
-      case 'menu':
-        return (
-          <MainMenu 
-            onSceneChange={handleSceneChange}
-            onShowSettings={() => setShowSettings(true)}
-            onShowHelp={() => setShowHelp(true)}
-          />
-        );
-        
-      case 'menu_play':
-        return (
-          <PlayMenu 
-            onSceneChange={handleSceneChange}
-            onStartMatch={handleStartMatch}
-            isSearching={isSearching}
-          />
-        );
-        
-      case 'practice':
-        return (
-          <div className="min-h-screen p-4">
-            <header className="mb-6">
-              <h1 className="text-3xl font-bold mb-2">Practice Mode</h1>
-              <p className="text-muted-foreground">Master your pronunciation in a safe environment</p>
-            </header>
-            
-            <main className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <section className="lg:col-span-2">
-                <FeedbackOverlay 
-                  target={(auto.lastDetected?.spell?.displayName ?? selectedSpell?.displayName) || ""} 
-                  result={auto.lastDetected?.result || result} 
-                  listening={listening || auto.listening} 
-                  loudness={autoMode ? auto.loudness : loudness} 
-                />
+  }, [activeTab, autoMode, autoListening]);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      <div className="container mx-auto p-4">
+        <header className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-white mb-2">Arcane Diction</h1>
+          <p className="text-slate-300">Cast spells with perfect pronunciation</p>
+        </header>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsTrigger value="practice">Practice Mode</TabsTrigger>
+            <TabsTrigger value="duel">Duel Mode</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="practice" className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <span>Practice Arena</span>
+                  {autoMode && <Badge variant="secondary">Voice Active</Badge>}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <SpellGame ref={gameRef} />
                 
-                <div className="mt-4 grid gap-4">
-                  <SpellGame ref={gameRef} />
+                <div className="mt-4 flex flex-wrap gap-3 items-center">
+                  <Button
+                    onClick={handleAutoToggle}
+                    variant={autoMode ? "default" : "outline"}
+                    className="flex items-center gap-2"
+                  >
+                    {autoMode ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+                    {autoMode ? "Voice: ON" : "Voice: OFF"}
+                  </Button>
                   
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <button 
-                      onClick={onCast}
-                      className="px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90 disabled:opacity-50"
-                      disabled={autoMode || listening || !settings.micEnabled || isCasting}
-                      data-event="cast"
-                    >
-                      {isCasting ? "Casting..." : listening ? "Listening..." : "Cast by Speaking"}
-                    </button>
-                    
-                    <button
-                      onClick={() => setAutoMode(!autoMode)}
-                      className={`px-4 py-2 rounded-lg border ${autoMode ? 'bg-green-500 text-white' : 'bg-background'}`}
-                      data-event="auto_mode_toggle"
-                    >
-                      Auto-cast: {autoMode ? 'ON' : 'OFF'}
-                    </button>
-                    
-                    <button
-                      onClick={() => handleSceneChange('menu')}
-                      className="px-4 py-2 bg-muted text-muted-foreground rounded-lg hover:opacity-90"
-                      data-event="practice_exit"
-                    >
-                      Back to Menu
-                    </button>
+                  <Button variant="outline" onClick={() => setShowSettings(true)}>
+                    <Settings className="h-4 w-4 mr-2" />
+                    Settings
+                  </Button>
+                  
+                  <div className="text-sm text-muted-foreground">
+                    Mana: {playerMana}/{MAX_MANA}
                   </div>
                 </div>
-              </section>
-              
-              <aside>
-            <SpellBook 
-              spells={spellsData}
-              selectedId={selectedSpell?.id}
-              onSelect={setSelectedSpell}
-            />
-            
-            <CastHistory history={castHistory} />
-              </aside>
-            </main>
-          </div>
-        );
-        
-      case 'match':
-        return (
-          <div className="min-h-screen relative">
-            <SpellGame ref={gameRef} />
-            
-            <MatchHUD 
-              player={player}
-              opponent={opponent}
-              isListening={listening || auto.listening}
-              loudness={autoMode ? auto.loudness : loudness}
-              pitchHz={autoMode ? auto.pitchHz : pitchHz}
-              onPause={() => setShowPause(true)}
-              onMicToggle={() => {
-                const newMicState = !settings.micEnabled;
-                const newSettings = { ...settings, micEnabled: newMicState };
-                setSettings(newSettings);
-                localStorage.setItem('arcane-settings', JSON.stringify(newSettings));
+
+                {renderQuickCastButtons()}
                 
-                if (newMicState && currentScene === 'match') {
-                  // Enable auto-cast when mic is turned on in match
-                  setAutoMode(true);
-                } else {
-                  // Disable auto-cast when mic is turned off
-                  setAutoMode(false);
-                  stop();
-                  auto.stop();
-                }
-              }}
-              onVoiceToggle={() => setSettings(prev => ({ ...prev, voiceVolume: prev.voiceVolume > 0 ? 0 : 0.8 }))}
-              micEnabled={settings.micEnabled}
-              voiceEnabled={settings.voiceVolume > 0}
-              vsBot={vsBot}
-            />
-            
-          
-          {/* Debug Panel (DEV) */}
-          {process.env.NODE_ENV === 'development' && (
-            <DebugPanel
-              autoMode={autoMode}
-              listening={listening}
-              autoListening={auto.listening}
-              micEnabled={settings.micEnabled}
-              currentScene={currentScene}
-              playerMana={player.mana}
-              botMana={opponent.mana}
-              lastDetection={auto.lastDetected}
-              onToggleAutoMode={() => setAutoMode(!autoMode)}
-              onTestCast={() => {
-                if (spellsData[0]) {
-                  handleSpellCast(spellsData[0], 75, 0.8, 'player');
-                }
-              }}
-            />
-          )}
-          
-          {/* Enhanced Casting Indicator */}
-            <CastingIndicator 
-              isListening={listening || auto.listening}
-              autoMode={autoMode}
-              micEnabled={settings.micEnabled}
-              lastSpellCast={lastCastSpell}
-              loudness={loudness}
-            />
-
-            {/* Quick Cast Panel for Manual Mode */}
-            {!autoMode && (
-              <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-30">
-                <div className="flex flex-col gap-2 p-3 bg-card/90 backdrop-blur-sm border rounded-lg shadow-lg">
-                  <div className="text-xs text-muted-foreground text-center">Quick Cast (Manual Mode)</div>
-                  <div className="flex gap-2 flex-wrap max-w-md">
-                    {spellsData.slice(0, 6).map(spell => (
-                      <QuickCastButton
-                        key={spell.id}
-                        spell={spell}
-                        onCast={(spell) => {
-                          if (playerMana.canCast(spell.manaCost)) {
-                            handleSpellCast(spell, 75, 0.8, 'player'); // Default accuracy for quick cast
-                          }
-                        }}
-                        disabled={!playerMana.canCast(spell.manaCost)}
-                        manaCost={spell.manaCost}
-                        currentMana={player.mana}
-                      />
-                    ))}
-                  </div>
+                <div className="mt-4">
+                  <MicVisualizer 
+                    listening={autoListening || manualListening}
+                    loudness={autoMode ? autoListening ? 1 : 0 : manualLoudness}
+                  />
                 </div>
-              </div>
-            )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
-            {/* Match Casting Controls */}
-            <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-30">
-              <Card className="glass-card">
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-4">
-                    {/* Manual Cast Button (for emergency) */}
-                    <Button 
-                      onClick={onCast}
-                      disabled={!settings.micEnabled || isCasting || !selectedSpell}
-                      className="px-6 py-3"
-                      data-event="match_manual_cast"
-                    >
-                      {isCasting ? "Casting..." : listening ? "Listening..." : "Emergency Cast"}
-                    </Button>
-                    
-                    {/* Auto-cast status */}
-                    <div className={`px-3 py-2 rounded-lg text-sm ${autoMode ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
-                      Auto-cast: {autoMode ? 'ACTIVE' : 'OFF'}
+          <TabsContent value="duel" className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Player</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span>Health:</span>
+                      <span className="text-red-500 font-bold">{playerHealth}/100</span>
                     </div>
-                    
-                    {/* Current spell indicator */}
-                    {selectedSpell && (
-                      <div className="text-sm text-muted-foreground">
-                        Ready: <span className="text-primary font-medium">{selectedSpell.displayName}</span>
-                      </div>
-                    )}
+                    <div className="flex justify-between">
+                      <span>Mana:</span>
+                      <span className="text-blue-500 font-bold">{playerMana}/{MAX_MANA}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Opponent</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span>Health:</span>
+                      <span className="text-red-500 font-bold">{opponentHealth}/100</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Mana:</span>
+                      <span className="text-blue-500 font-bold">{opponentMana}/{MAX_MANA}</span>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
             </div>
-            
-            {/* Spell Cooldown Tracker */}
-            <div className="absolute bottom-6 right-6 z-30">
-              <SpellCooldownTracker 
-                recentCasts={castHistory}
-                cooldownMs={COOLDOWN_MS}
-              />
-            </div>
-            
-            {/* Player Combo Display */}
-            {playerCombo.count > 1 && (
-              <div className="absolute top-32 left-6 z-30">
-                <ComboDisplay combo={playerCombo} />
-              </div>
-            )}
-            
-            {/* Opponent Combo Display */}
-            {opponentCombo.count > 1 && (
-              <div className="absolute top-32 right-6 z-30">
-                <ComboDisplay combo={opponentCombo} />
-              </div>
-            )}
-            
-            {/* Match Stats */}
-            <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-30">
-              <MatchStats 
-                castHistory={castHistory}
-                matchDuration={Date.now() - (castHistory[0]?.timestamp || Date.now())}
-                playerHP={player.hp}
-                opponentHP={opponent.hp}
-              />
-            </div>
 
-            {isCasting && (
-              <CastingOverlay 
-                isCasting={isCasting}
-                spell={selectedSpell}
-                cooldowns={{}}
-              />
-            )}
-          </div>
-        );
-        
-      default:
-        return <MainMenu onSceneChange={handleSceneChange} onShowSettings={() => setShowSettings(true)} onShowHelp={() => setShowHelp(true)} />;
-    }
-  };
-  
-  return (
-    <>
-      <Helmet>
-        <title>Arcane Diction – Master Magic Through Perfect Pronunciation</title>
-        <meta name="description" content="Cast spells with your voice! Master pronunciation to unleash magical combat with real-time feedback, combos, and online multiplayer duels." />
-        <meta property="og:title" content="Arcane Diction – Voice-Powered Spellcasting Game" />
-        <meta property="og:description" content="Revolutionary pronunciation training through magical combat. Speak clearly to cast powerful spells!" />
-      </Helmet>
-      
-      {renderScene()}
-      
-          
-          {/* Pronunciation Feedback */}
-          {pronunciationData && (
-            <PronunciationFeedback
-              isVisible={showPronunciationFeedback}
-              onClose={() => setShowPronunciationFeedback(false)}
-              targetSpell={pronunciationData.targetSpell}
-              userSaid={pronunciationData.userSaid}
-              accuracy={pronunciationData.accuracy}
-              letters={pronunciationData.letters}
-              confidence={pronunciationData.confidence}
-              didCast={pronunciationData.didCast}
-            />
-          )}
-          
-          {/* Modals */}
-          {showSettings && (
-            <GameSettingsModal 
-              settings={settings}
-              onSettingsChange={(newSettings) => {
-                const oldSettings = settings;
-                setSettings(newSettings);
-                localStorage.setItem('arcane-settings', JSON.stringify(newSettings));
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <span>Battle Arena</span>
+                  {isGameActive && <Badge variant="destructive">Active Battle</Badge>}
+                  {autoMode && <Badge variant="secondary">Voice Active</Badge>}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <SpellGame ref={gameRef} />
                 
-                // Apply audio settings immediately
-                SoundManager.setVolume(newSettings.sfxVolume, newSettings.musicVolume);
+                <div className="mt-4 flex flex-wrap gap-3 items-center">
+                  {!isGameActive ? (
+                    <Button onClick={startBotFight} className="flex items-center gap-2">
+                      <Play className="h-4 w-4" />
+                      Start Bot Fight
+                    </Button>
+                  ) : (
+                    <Button onClick={stopBotFight} variant="destructive" className="flex items-center gap-2">
+                      <Pause className="h-4 w-4" />
+                      Stop Fight
+                    </Button>
+                  )}
+                  
+                  <Button onClick={resetGame} variant="outline" className="flex items-center gap-2">
+                    <RotateCcw className="h-4 w-4" />
+                    Reset
+                  </Button>
+                  
+                  <Button
+                    onClick={handleAutoToggle}
+                    variant={autoMode ? "default" : "outline"}
+                    className="flex items-center gap-2"
+                  >
+                    {autoMode ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
+                    {autoMode ? "Voice: ON" : "Voice: OFF"}
+                  </Button>
+                </div>
+
+                {renderQuickCastButtons()}
                 
-                // Apply voice settings changes with proper state management
-                if (newSettings.micEnabled !== oldSettings.micEnabled) {
-                  if (newSettings.micEnabled && currentScene === 'match') {
-                    // Enable auto-cast when mic is enabled in match
-                    setAutoMode(true);
-                  } else if (!newSettings.micEnabled) {
-                    // Stop all voice recognition when mic is disabled
-                    stop();
-                    auto.stop();
-                    setAutoMode(false);
-                  }
-                }
-                
-                // Apply sensitivity changes to auto-spell
-                if (newSettings.sensitivity !== oldSettings.sensitivity && auto.listening) {
-                  // Restart auto-spell with new sensitivity
-                  auto.stop();
-                  setTimeout(() => {
-                    if (autoMode && settings.micEnabled) {
-                      auto.start();
-                    }
-                  }, 300);
-                }
-              }}
-              onClose={() => setShowSettings(false)}
-            />
-          )}
-      
-      {showHelp && (
-        <HelpModal onClose={() => setShowHelp(false)} />
-      )}
-      
-      {showPause && currentScene === 'match' && (
-        <PauseMenu 
-          onResume={() => setShowPause(false)}
-          onSettings={() => {
-            setShowPause(false);
-            setShowSettings(true);
-          }}
-          onQuit={() => {
-            setShowPause(false);
-            endMatch();
-            handleSceneChange('menu');
-          }}
-          onRestart={vsBot ? () => {
-            setShowPause(false);
-            endMatch();
-            startBotMatch(botConfig);
-          } : undefined}
-          vsBot={vsBot}
+                <div className="mt-4">
+                  <MicVisualizer 
+                    listening={autoListening || manualListening}
+                    loudness={autoMode ? autoListening ? 1 : 0 : manualLoudness}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+
+        {/* Casting Indicator */}
+        <CastingIndicator 
+          isListening={autoListening || manualListening}
+          autoMode={autoMode}
+          micEnabled={true}
+          lastSpellCast={lastDetected?.spell?.displayName || ""}
+          loudness={autoMode ? (autoListening ? 1 : 0) : manualLoudness}
         />
+
+        {/* Debug Panel (Development only) */}
+        {process.env.NODE_ENV === 'development' && (
+          <DebugPanel
+            autoMode={autoMode}
+            listening={manualListening}
+            autoListening={autoListening}
+            micEnabled={true}
+            currentScene={activeTab}
+            playerMana={playerMana}
+            botMana={opponentMana}
+            lastDetection={lastDetected}
+            onToggleAutoMode={handleAutoToggle}
+            onTestCast={() => {
+              if (spellsData[0]) {
+                handleQuickCast(spellsData[0]);
+              }
+            }}
+          />
+        )}
+      </div>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <SettingsComponent
+          settings={gameSettings}
+          onSettingsChange={handleSettingsChange}
+        >
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => setShowSettings(true)}
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
+        </SettingsComponent>
       )}
-      
-      {matchResult && (
-        <ResultsScreen 
-          result={matchResult}
-          onPlayAgain={() => {
-            setMatchResult(null);
-            if (vsBot) {
-              startBotMatch(botConfig);
-            } else {
-              handleStartMatch('quick');
-            }
-          }}
-          onMainMenu={() => {
-            setMatchResult(null);
-            endMatch();
-            handleSceneChange('menu');
-          }}
-          castHistory={castHistory}
-          vsBot={vsBot}
-        />
-      )}
-      
-      {/* Mic Permission Modal */}
-      <MicPermissionModal 
-        open={showMicPermission}
-        onClose={() => setShowMicPermission(false)}
-        onRetry={async () => {
-          try {
-            // Test microphone access
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(track => track.stop());
-            setShowMicPermission(false);
-            toast.success("Microphone access granted!");
-          } catch (e: any) {
-            toast.error("Still unable to access microphone: " + e.message);
-          }
-        }}
-        error={error || auto.error}
+
+      <PerfHUD 
+        visible={showPerfHUD} 
+        onProfileChange={handleProfileChange}
       />
-    </>
+    </div>
   );
 };
 
