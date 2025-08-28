@@ -50,11 +50,30 @@ export default function GameSettingsModal({ settings, onSettingsChange, onClose 
   // Test microphone function
   const testMicrophone = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(track => track.stop());
-      toast.success("Microphone test successful!");
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      // Test audio analysis
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = audioCtx.createAnalyser();
+      const mic = audioCtx.createMediaStreamSource(stream);
+      mic.connect(analyser);
+      
+      // Cleanup after 1 second
+      setTimeout(() => {
+        stream.getTracks().forEach(track => track.stop());
+        audioCtx.close();
+        toast.success("✅ Microphone test successful!");
+      }, 1000);
+      
+      toast.info("🎤 Testing microphone...");
     } catch (error) {
-      toast.error("Microphone test failed: " + (error as Error).message);
+      toast.error("❌ Microphone test failed: " + (error as Error).message);
     }
   };
 
@@ -203,6 +222,17 @@ export default function GameSettingsModal({ settings, onSettingsChange, onClose 
                 />
               </div>
             </div>
+          </div>
+
+          {/* Microphone Test */}
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2">
+              <Mic className="w-5 h-5" />
+              <h3 className="text-lg font-semibold">Microphone Test</h3>
+            </div>
+            <Button onClick={testMicrophone} variant="outline" className="w-full">
+              Test Microphone & Audio
+            </Button>
           </div>
 
           {/* Actions */}

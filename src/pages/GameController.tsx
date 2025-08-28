@@ -129,7 +129,7 @@ const GameController = () => {
   
   // Speech recognition and auto-cast  
   const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
-  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 100, minConfidence: 0.5 });
+  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 100, minConfidence: 0.4 }); // Lower confidence for better detection
   
   // Mana system
   const playerMana = useManaSystem({
@@ -148,9 +148,9 @@ const GameController = () => {
     enabled: vsBot
   });
   
-  // Spam protection
-  const COOLDOWN_MS = 1200;
-  const ECHO_SUPPRESS_MS = 500;
+  // FIXED: Reduced spam protection for better responsiveness
+  const COOLDOWN_MS = 800;  // Reduced from 1200ms
+  const ECHO_SUPPRESS_MS = 300;  // Reduced from 500ms
   const castGateRef = useRef<{
     lastAt: number;
     lastTranscript: string;
@@ -659,14 +659,20 @@ const GameController = () => {
               pitchHz={autoMode ? auto.pitchHz : pitchHz}
               onPause={() => setShowPause(true)}
               onMicToggle={() => {
-                const newMicEnabled = !settings.micEnabled;
-                setSettings(prev => ({ ...prev, micEnabled: newMicEnabled }));
+                const newMicState = !settings.micEnabled;
+                const newSettings = { ...settings, micEnabled: newMicState };
+                setSettings(newSettings);
+                localStorage.setItem('arcane-settings', JSON.stringify(newSettings));
                 
-                // Start auto-cast when enabling mic in match
-                if (newMicEnabled && !autoMode) {
+                if (newMicState && currentScene === 'match') {
+                  // Enable auto-cast when mic is turned on in match
                   setAutoMode(true);
-                } else if (!newMicEnabled && autoMode) {
+                  setTimeout(() => auto.start(), 100);
+                } else {
+                  // Disable auto-cast when mic is turned off
                   setAutoMode(false);
+                  stop();
+                  auto.stop();
                 }
               }}
               onVoiceToggle={() => setSettings(prev => ({ ...prev, voiceVolume: prev.voiceVolume > 0 ? 0 : 0.8 }))}
@@ -768,7 +774,34 @@ const GameController = () => {
           {showSettings && (
             <GameSettingsModal 
               settings={settings}
-              onSettingsChange={setSettings}
+              onSettingsChange={(newSettings) => {
+                const oldSettings = settings;
+                setSettings(newSettings);
+                localStorage.setItem('arcane-settings', JSON.stringify(newSettings));
+                
+                // Apply audio settings immediately
+                SoundManager.setVolume(newSettings.sfxVolume, newSettings.musicVolume);
+                
+                // Apply voice settings changes with proper state management
+                if (newSettings.micEnabled !== oldSettings.micEnabled) {
+                  if (newSettings.micEnabled && autoMode && currentScene === 'match') {
+                    // Start auto-cast when mic is enabled in match
+                    setTimeout(() => auto.start(), 200);
+                  } else if (!newSettings.micEnabled) {
+                    // Stop all voice recognition when mic is disabled
+                    stop();
+                    auto.stop();
+                    setAutoMode(false);
+                  }
+                }
+                
+                // Apply sensitivity changes to auto-spell
+                if (newSettings.sensitivity !== oldSettings.sensitivity && auto.listening) {
+                  // Restart auto-spell with new sensitivity
+                  auto.stop();
+                  setTimeout(() => auto.start(), 300);
+                }
+              }}
               onClose={() => setShowSettings(false)}
             />
           )}

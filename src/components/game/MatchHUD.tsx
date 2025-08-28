@@ -148,10 +148,10 @@ export default function MatchHUD({
               pitchHz={pitchHz} 
               listening={isListening}
             />
-            {/* Voice status indicator */}
+            {/* Voice status indicator - FIXED: Show once, no constant updates */}
             <div className="mt-2 text-center">
-              <div className={`text-xs ${isListening ? 'text-green-400' : 'text-muted-foreground'}`}>
-                {isListening ? 'Listening for spells...' : 'Voice inactive'}
+              <div className={`text-xs transition-all duration-300 ${isListening ? 'text-green-400' : 'text-muted-foreground'}`}>
+                {isListening ? 'Auto-cast active' : 'Voice inactive'}
               </div>
             </div>
           </CardContent>

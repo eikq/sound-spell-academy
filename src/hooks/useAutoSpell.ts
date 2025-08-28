@@ -293,7 +293,7 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
         segmentCastedRef.current = false;
       }
       lastVoiceAtRef.current = now;
-    } else if (speakingRef.current && now - lastVoiceAtRef.current > 1500) {
+    } else if (speakingRef.current && now - lastVoiceAtRef.current > 800) { // Faster end detection
       // Phrase ended: cast once using last final transcript if available
       if (!segmentCastedRef.current && lastFinalRef.current && lastFinalRef.current.time >= segmentStartedAtRef.current) {
         const { transcript, confidence } = lastFinalRef.current;
@@ -313,7 +313,7 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
           }
             const key = bestMatch.spell.id;
             const lastAt = lastSpellCastAtRef.current[key] ?? 0;
-            if (now - lastAt >= 3000) {
+            if (now - lastAt >= 2000) { // Reduced cooldown to 2s for better responsiveness
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
               const result: PronunciationResult = {
                 transcript,

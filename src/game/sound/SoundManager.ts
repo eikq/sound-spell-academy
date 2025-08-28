@@ -142,6 +142,12 @@ export function playLayeredSound({
 }
 
 export const SoundManager = {
+  setVolume(sfxVolume: number, musicVolume: number) {
+    if (masterGain) {
+      masterGain.gain.value = sfxVolume * 0.3; // Scale to reasonable level
+    }
+  },
+  
   cast(element: keyof typeof elementBaseFreq, power: number, chargeTier: 0 | 1 | 2) {
     playLayeredSound({ 
       element, 
