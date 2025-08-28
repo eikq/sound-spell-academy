@@ -7,7 +7,7 @@ import { Mic, MicOff, Volume2, VolumeX, Play, Pause, RotateCcw, Settings, Zap } 
 import { SpellGame } from "@/game/SpellGame";
 import type { SpellGameRef } from "@/game/SpellGame";
 import MicVisualizer from "@/components/game/MicVisualizer";
-import spellsData from "@/game/spells/data";
+import HARRY_POTTER_SPELLS from "@/game/spells/data";
 import type { Spell, Element } from "@/game/spells/data";
 import { useManaSystem } from "@/hooks/useManaSystem";
 import { useAutoSpell, getBestMatch } from "@/hooks/useAutoSpell";
@@ -93,7 +93,7 @@ const GameController = () => {
     start: startAuto, 
     stop: stopAuto,
     error: autoError 
-  } = useAutoSpell(spellsData, {
+  } = useAutoSpell(HARRY_POTTER_SPELLS, {
     minAccuracy: gameSettings.minAccuracy,
     minConfidence: gameSettings.minConfidence
   });
@@ -207,7 +207,7 @@ const GameController = () => {
     botIntervalRef.current = setInterval(() => {
       if (opponentHealth <= 0 || playerHealth <= 0) return;
       
-      const randomSpell = spellsData[Math.floor(Math.random() * spellsData.length)];
+      const randomSpell = HARRY_POTTER_SPELLS[Math.floor(Math.random() * HARRY_POTTER_SPELLS.length)];
       const manaCost = 10 + (randomSpell.difficulty * 5);
       
       if (opponentManaSystem.consumeMana(manaCost)) {
@@ -259,7 +259,7 @@ const GameController = () => {
   };
 
   const commonSpells = useMemo(() => 
-    spellsData.filter(spell => spell.difficulty <= 2).slice(0, 6)
+    HARRY_POTTER_SPELLS.filter(spell => spell.difficulty <= 2).slice(0, 6)
   , []);
 
   const renderQuickCastButtons = () => (
@@ -463,8 +463,8 @@ const GameController = () => {
             lastDetection={lastDetected}
             onToggleAutoMode={handleAutoToggle}
             onTestCast={() => {
-              if (spellsData[0]) {
-                handleQuickCast(spellsData[0]);
+              if (HARRY_POTTER_SPELLS[0]) {
+                handleQuickCast(HARRY_POTTER_SPELLS[0]);
               }
             }}
           />
