@@ -35,6 +35,7 @@ import ComboDisplay from "@/components/game/ComboDisplay";
 import MatchStats from "@/components/game/MatchStats";
 import CastingIndicator from "@/components/game/CastingIndicator";
 import QuickCastButton from "@/components/game/QuickCastButton";
+import PronunciationFeedback from "@/components/game/PronunciationFeedback";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
@@ -105,6 +106,17 @@ const GameController = () => {
   }>>([]);
   const [lastCastSpell, setLastCastSpell] = useState<string>(''); // For UI feedback
   
+  // Pronunciation feedback state
+  const [showPronunciationFeedback, setShowPronunciationFeedback] = useState(false);
+  const [pronunciationData, setPronunciationData] = useState<{
+    targetSpell: string;
+    userSaid: string;
+    accuracy: number;
+    letters: any[];
+    confidence: number;
+    didCast: boolean;
+  } | null>(null);
+  
   // Settings
   const [settings, setSettings] = useState<GameSettings>(() => {
     const saved = localStorage.getItem('arcane-settings');
@@ -132,7 +144,7 @@ const GameController = () => {
   
   // Speech recognition and auto-cast  
   const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
-  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 50, minConfidence: 0.3 }); // Much easier thresholds
+  const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 30, minConfidence: 0.2 }); // Ultra-easy thresholds
   
   // Mana system
   const playerMana = useManaSystem({
@@ -345,7 +357,7 @@ const GameController = () => {
     await start(selectedSpell.displayName);
   };
   
-  // Handle manual cast results
+  // Handle manual cast results with pronunciation feedback
   useEffect(() => {
     if (!result || !selectedSpell) return;
     
@@ -368,10 +380,24 @@ const GameController = () => {
     const accuracy = result.accuracy / 100;
     const power = clamp01(0.75 * accuracy + 0.25 * result.loudness);
     
-    handleSpellCast(selectedSpell, result.accuracy, power, 'player');
+    // Show pronunciation feedback regardless of whether spell casts
+    const didCast = accuracy >= 0.15; // Cast with very low accuracy!
+    setPronunciationData({
+      targetSpell: selectedSpell.displayName,
+      userSaid: result.transcript,
+      accuracy: result.accuracy,
+      letters: result.letters,
+      confidence: result.confidence,
+      didCast
+    });
+    setShowPronunciationFeedback(true);
+    
+    if (didCast) {
+      handleSpellCast(selectedSpell, result.accuracy, power, 'player');
+    }
   }, [result, selectedSpell]);
   
-  // Handle auto-cast results
+  // Handle auto-cast results with pronunciation feedback
   useEffect(() => {
     const detection = auto.lastDetected;
     if (!detection) return;
@@ -380,6 +406,17 @@ const GameController = () => {
     const now = Date.now();
 
     if (now - castGateRef.current.lastAt < COOLDOWN_MS) return;
+
+    // Show pronunciation feedback for auto-cast too
+    setPronunciationData({
+      targetSpell: spell.displayName,
+      userSaid: result.transcript,
+      accuracy: result.accuracy,
+      letters: result.letters,
+      confidence: result.confidence,
+      didCast: true
+    });
+    setShowPronunciationFeedback(true);
 
     handleSpellCast(spell, result.accuracy, power, 'player');
     castGateRef.current.lastAt = now;
@@ -808,7 +845,22 @@ const GameController = () => {
       
       {renderScene()}
       
-      {/* Modals */}
+          
+          {/* Pronunciation Feedback */}
+          {pronunciationData && (
+            <PronunciationFeedback
+              isVisible={showPronunciationFeedback}
+              onClose={() => setShowPronunciationFeedback(false)}
+              targetSpell={pronunciationData.targetSpell}
+              userSaid={pronunciationData.userSaid}
+              accuracy={pronunciationData.accuracy}
+              letters={pronunciationData.letters}
+              confidence={pronunciationData.confidence}
+              didCast={pronunciationData.didCast}
+            />
+          )}
+          
+          {/* Modals */}
           {showSettings && (
             <GameSettingsModal 
               settings={settings}

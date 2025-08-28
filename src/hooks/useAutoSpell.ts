@@ -78,8 +78,8 @@ function computeScores(targetPhrase: string, spokenPhrase: string, aliases: stri
     }
   }
 
-  // Weighted final accuracy
-  const accuracy = Math.max(0, Math.min(1, 0.55 * nameAcc + 0.25 * aliasAcc + 0.20 * phonemeAcc));
+  // ULTRA-FORGIVING weighted final accuracy - cast almost anything!
+  const accuracy = Math.max(0, Math.min(1, 0.40 * nameAcc + 0.35 * aliasAcc + 0.25 * phonemeAcc)); // More weight on aliases
   const letters = letterHighlights(t, s);
   return { accuracy: accuracy * 100, phoneticScore: phonemeAcc * 100, letters };
 }
@@ -98,11 +98,11 @@ export function getBestMatch(spells: Spell[], result: { transcript: string; loud
     const detail = computeScores(spellName, result.transcript, aliases, phonemes);
     const accuracy = detail.accuracy / 100;
     
-    // FIXED: Much easier difficulty thresholds for better user experience
-    const thresholds = { 1: 0.35, 2: 0.40, 3: 0.45, 4: 0.50, 5: 0.55 }; // Significantly lowered
-    const threshold = thresholds[spell.difficulty] || 0.40; // Lower default threshold
+    // ULTRA-EASY casting thresholds - cast almost anything!
+    const thresholds = { 1: 0.20, 2: 0.25, 3: 0.30, 4: 0.35, 5: 0.40 }; // Extremely low thresholds
+    const threshold = thresholds[spell.difficulty] || 0.25; // Very low default threshold
     
-    if (accuracy >= threshold && result.confidence >= 0.3) { // Lowered confidence requirement
+    if (accuracy >= threshold && result.confidence >= 0.2) { // Extremely low confidence requirement
       const basePower = (spell as any).basePower || 1.0;
       const power = basePower * (0.6 + 0.4 * accuracy) * (0.9 + 0.2 * result.loudness);
       const clampedPower = Math.max(0.4, Math.min(2.0, power));
@@ -147,8 +147,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   const shouldListenRef = useRef(false);
   const lastSpellCastAtRef = useRef<Record<string, number>>({});
   
-  const minAccuracy = opts?.minAccuracy ?? 0.40; // Much lower for easier casting
-  const minConfidence = opts?.minConfidence ?? 0.3; // Lowered confidence requirement
+  const minAccuracy = opts?.minAccuracy ?? 0.25; // Ultra-low for maximum ease
+  const minConfidence = opts?.minConfidence ?? 0.2; // Very low confidence requirement
 
   const setupAudio = useCallback(async () => {
     if (audioCtxRef.current || isStartingRef.current) return;
@@ -312,11 +312,11 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
           }
           
-          // BUG FIX: Check if bestMatch exists before using it
-          if (bestMatch && bestMatch.score >= minAccuracy / 100 && confidence >= minConfidence) {
+          // BUG FIX: Check if bestMatch exists and use ultra-low thresholds
+          if (bestMatch && bestMatch.score >= 0.15) { // Ultra-low threshold - cast almost anything!
             const key = bestMatch.spell.id;
             const lastAt = lastSpellCastAtRef.current[key] ?? 0;
-            if (now - lastAt >= 1000) { // Reduced to 1s for better responsiveness
+            if (now - lastAt >= 800) { // Fast cooldown for responsiveness
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
               const result: PronunciationResult = {
                 transcript,
