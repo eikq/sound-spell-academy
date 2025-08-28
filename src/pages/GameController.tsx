@@ -36,6 +36,7 @@ import MatchStats from "@/components/game/MatchStats";
 import CastingIndicator from "@/components/game/CastingIndicator";
 import QuickCastButton from "@/components/game/QuickCastButton";
 import PronunciationFeedback from "@/components/game/PronunciationFeedback";
+import DebugPanel from "@/components/game/DebugPanel";
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
@@ -248,12 +249,25 @@ const GameController = () => {
     setSettings(prev => ({ ...prev, micEnabled: true }));
     setAutoMode(true);
     
+    // CRITICAL FIX: Start auto-cast immediately after setting autoMode
+    setTimeout(() => {
+      auto.start().then(() => {
+        console.log("Auto-cast started for bot match");
+        toast.success("Auto-cast activated! Speak any spell name!");
+      }).catch((err) => {
+        console.error("Failed to start auto-cast:", err);
+        toast.error(`Auto-cast failed: ${err.message}`);
+        setAutoMode(false);
+      });
+    }, 500);
+    
     // Start bot after a short delay
     setTimeout(() => {
       if (botRef.current) {
         botRef.current.start((spell, accuracy, power) => {
           handleBotCast(spell, accuracy, power);
         });
+        console.log("Bot opponent started");
       }
     }, 2000);
   };
@@ -262,14 +276,14 @@ const GameController = () => {
   const handleBotCast = (spell: Spell, accuracy: number, power: number) => {
     if (!vsBot || !botRef.current) return;
     
-    // Check bot mana
-    if (!opponentMana.canCast(spell.manaCost)) {
-      console.log(`Bot cannot cast ${spell.displayName} - insufficient mana`);
+    // FIXED: Check bot mana properly
+    if (opponent.mana < spell.manaCost) {
+      console.log(`Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${opponent.mana}`);
       return;
     }
     
-    // Consume bot mana
-    opponentMana.consumeMana(spell.manaCost);
+    // FIXED: Consume bot mana directly
+    setOpponent(prev => ({ ...prev, mana: Math.max(0, prev.mana - spell.manaCost) }));
     
     // Update opponent combo
     const newCombo = ComboSystem.updateCombo(opponentCombo, spell, accuracy);
@@ -432,17 +446,21 @@ const GameController = () => {
   
   // Unified spell casting handler
   const handleSpellCast = (spell: Spell, accuracy: number, power: number, caster: 'player' | 'enemy') => {
-    // Check mana before casting
-    const manaSystem = caster === 'player' ? playerMana : opponentMana;
-    if (!manaSystem.canCast(spell.manaCost)) {
+    // FIXED: Check mana before casting
+    if (!playerMana.canCast(spell.manaCost)) {
+      console.log(`Player cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${player.mana}`);
       if (caster === 'player') {
         toast.error(`Not enough mana! Need ${spell.manaCost}, have ${player.mana}`);
       }
       return;
     }
     
-    // Consume mana
-    manaSystem.consumeMana(spell.manaCost);
+    console.log(`${caster} casting ${spell.displayName} (${Math.round(accuracy)}% accuracy, ${spell.manaCost} mana)`);
+    
+    // FIXED: Consume mana directly for player
+    if (caster === 'player') {
+      playerMana.consumeMana(spell.manaCost);
+    }
     
     SoundManager.castRelease(spell.element, power);
     gameRef.current?.castSpell(spell.element, power, caster);
@@ -571,20 +589,24 @@ const GameController = () => {
     setCastHistory([]);
   };
   
-  // Auto-mode toggle
+  // FIXED: Auto-mode toggle with proper error handling
   useEffect(() => {
-    if (autoMode) {
-      stop();
+    if (autoMode && settings.micEnabled && currentScene === 'match') {
+      console.log("Starting auto-cast mode...");
+      stop(); // Stop manual recognition first
       auto.start().then(() => {
-        toast.success("Auto-cast activated!");
+        console.log("Auto-cast activated successfully!");
+        toast.success("🎤 Auto-cast activated! Just speak any spell name!");
       }).catch((err) => {
+        console.error("Auto-cast failed:", err);
         toast.error(`Failed to start auto-cast: ${err.message}`);
         setAutoMode(false);
       });
-    } else {
+    } else if (!autoMode) {
+      console.log("Stopping auto-cast mode...");
       auto.stop();
     }
-  }, [autoMode, auto, stop]);
+  }, [autoMode, settings.micEnabled, currentScene]); // Added proper dependencies
   
   // Error handling and mic permission
   useEffect(() => {
@@ -708,7 +730,6 @@ const GameController = () => {
                 if (newMicState && currentScene === 'match') {
                   // Enable auto-cast when mic is turned on in match
                   setAutoMode(true);
-                  setTimeout(() => auto.start(), 100);
                 } else {
                   // Disable auto-cast when mic is turned off
                   setAutoMode(false);
@@ -722,7 +743,28 @@ const GameController = () => {
               vsBot={vsBot}
             />
             
-            {/* Enhanced Casting Indicator */}
+          
+          {/* Debug Panel (DEV) */}
+          {process.env.NODE_ENV === 'development' && (
+            <DebugPanel
+              autoMode={autoMode}
+              listening={listening}
+              autoListening={auto.listening}
+              micEnabled={settings.micEnabled}
+              currentScene={currentScene}
+              playerMana={player.mana}
+              botMana={opponent.mana}
+              lastDetection={auto.lastDetected}
+              onToggleAutoMode={() => setAutoMode(!autoMode)}
+              onTestCast={() => {
+                if (spellsData[0]) {
+                  handleSpellCast(spellsData[0], 75, 0.8, 'player');
+                }
+              }}
+            />
+          )}
+          
+          {/* Enhanced Casting Indicator */}
             <CastingIndicator 
               isListening={listening || auto.listening}
               autoMode={autoMode}
@@ -874,9 +916,9 @@ const GameController = () => {
                 
                 // Apply voice settings changes with proper state management
                 if (newSettings.micEnabled !== oldSettings.micEnabled) {
-                  if (newSettings.micEnabled && autoMode && currentScene === 'match') {
-                    // Start auto-cast when mic is enabled in match
-                    setTimeout(() => auto.start(), 200);
+                  if (newSettings.micEnabled && currentScene === 'match') {
+                    // Enable auto-cast when mic is enabled in match
+                    setAutoMode(true);
                   } else if (!newSettings.micEnabled) {
                     // Stop all voice recognition when mic is disabled
                     stop();
@@ -889,7 +931,11 @@ const GameController = () => {
                 if (newSettings.sensitivity !== oldSettings.sensitivity && auto.listening) {
                   // Restart auto-spell with new sensitivity
                   auto.stop();
-                  setTimeout(() => auto.start(), 300);
+                  setTimeout(() => {
+                    if (autoMode && settings.micEnabled) {
+                      auto.start();
+                    }
+                  }, 300);
                 }
               }}
               onClose={() => setShowSettings(false)}
