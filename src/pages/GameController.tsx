@@ -297,15 +297,15 @@ const GameController = () => {
     
     // Auto-cast will be started by the useEffect above when autoMode is set
     
-    // Start bot after a delay and ensure proper mana system
-    setTimeout(() => {
-      if (botRef.current) {
-        botRef.current.start((spell, accuracy, power) => {
-          handleBotCast(spell, accuracy, power);
-        });
-        console.log("🤖 Bot opponent started");
-      }
-    }, 2000);
+    // Start bot immediately with proper logging
+    if (botRef.current) {
+      console.log('🤖 Starting bot opponent...');
+      botRef.current.start((spell, accuracy, power) => {
+        console.log(`🤖 Bot casts ${spell.displayName} with ${accuracy}% accuracy`);
+        handleBotCast(spell, accuracy, power);
+      });
+      console.log("✅ Bot opponent started successfully");
+    }
   };
   
   // Bot match cleanup

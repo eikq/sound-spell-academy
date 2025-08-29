@@ -41,15 +41,17 @@ export class BotOpponent {
   private scheduleNextCast() {
     if (!this.isActive) return;
     
-    // Regenerate mana over time
-    this.mana = Math.min(100, this.mana + 2); // Regen 2 mana per cast cycle
+    // Faster bot mana regeneration to match player
+    this.mana = Math.min(100, this.mana + 8); // Much faster regen to match player
     
     const [minInterval, maxInterval] = this.config.castInterval;
     const interval = minInterval + Math.random() * (maxInterval - minInterval);
     
     this.intervalId = setTimeout(() => {
-      this.castSpell();
-      this.scheduleNextCast();
+      if (this.isActive) { // Additional check
+        this.castSpell();
+        this.scheduleNextCast();
+      }
     }, interval) as any;
   }
   

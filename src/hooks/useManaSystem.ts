@@ -12,7 +12,7 @@ export function useManaSystem({
   currentMana,
   maxMana,
   onManaChange,
-  regenRate = 2, // 2 mana per second by default
+  regenRate = 8, // Much faster: 8 mana per second
   enabled = true
 }: ManaSystemProps) {
   const lastRegenTime = useRef(Date.now());

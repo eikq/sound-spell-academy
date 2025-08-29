@@ -320,11 +320,11 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             console.log(`❌ No spell matches found for: "${transcript}"`);
           }
           
-          // BUG FIX: Check if bestMatch exists and use ultra-low thresholds
-          if (bestMatch && bestMatch.score >= 0.10) { // EVEN LOWER threshold - cast almost anything!
+          // Use ultra-low thresholds for easier casting
+          if (bestMatch && bestMatch.score >= 0.08) { // SUPER LOW threshold
             const key = bestMatch.spell.id;
             const lastAt = lastSpellCastAtRef.current[key] ?? 0;
-            if (now - lastAt >= 500) { // Faster cooldown for better responsiveness
+            if (now - lastAt >= 300) { // Even faster cooldown
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
               const result: PronunciationResult = {
                 transcript,
@@ -335,7 +335,6 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
                 letters: bestMatch.detail.letters,
               };
               
-              // ADD DEBUG LOGGING
               console.log(`🎯 SPELL DETECTED: "${transcript}" → ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% match)`);
               
               setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
