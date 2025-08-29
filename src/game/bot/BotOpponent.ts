@@ -12,7 +12,13 @@ export class BotOpponent {
   private intervalId?: number;
   
   constructor(config: BotConfig) {
-    this.config = config;
+    // Improve bot configuration for better combat
+    this.config = {
+      ...config,
+      castInterval: [1500, 3000], // Faster casting: 1.5-3 seconds
+      accuracy: [0.7, 0.95], // Higher accuracy: 70-95%
+      difficulty: config.difficulty || 'medium'
+    };
   }
   
   start(onCast: (spell: Spell, accuracy: number, power: number) => void) {
@@ -56,26 +62,35 @@ export class BotOpponent {
   }
   
   private castSpell() {
-    if (!this.isActive || !this.castCallback) return;
+    if (!this.isActive || !this.castCallback) {
+      console.log('🤖 Bot cannot cast - inactive or no callback');
+      return;
+    }
     
     const now = Date.now();
     
-    // Respect global cooldown
-    if (now - this.lastCastTime < 1000) return;
+    // Respect global cooldown - reduced for more action
+    if (now - this.lastCastTime < 800) {
+      console.log('🤖 Bot in global cooldown');
+      return;
+    }
     
     // Check if bot has enough mana
-    if (this.mana < 15) {
-      console.log('Bot waiting for mana to regenerate...');
+    if (this.mana < 10) {
+      console.log('🤖 Bot waiting for mana to regenerate...');
       return;
     }
     
     // Select random spell with some intelligence
     const spell = this.selectSpell();
-    if (!spell) return;
+    if (!spell) {
+      console.log('🤖 Bot found no available spells');
+      return;
+    }
     
     // Check specific spell mana cost
     if (this.mana < spell.manaCost) {
-      console.log(`Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${this.mana}`);
+      console.log(`🤖 Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${this.mana}`);
       return;
     }
     
@@ -91,7 +106,7 @@ export class BotOpponent {
     const power = Math.min(1.0, 0.75 * accuracy + 0.25 * loudness);
     
     this.lastCastTime = now;
-    console.log(`Bot casting ${spell.displayName} with ${Math.round(accuracy * 100)}% accuracy`);
+    console.log(`🤖 Bot casting ${spell.displayName} with ${Math.round(accuracy * 100)}% accuracy (mana: ${this.mana})`);
     this.castCallback(spell, Math.round(accuracy * 100), power);
   }
   

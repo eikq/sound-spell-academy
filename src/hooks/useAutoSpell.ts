@@ -275,35 +275,45 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
       sumSquares += buffer[i] * buffer[i];
     }
     const rms = Math.sqrt(sumSquares / buffer.length);
-    const normalized = Math.max(0, Math.min(1, (rms - 0.015) / 0.3)); // Adjusted sensitivity
+    const normalized = Math.max(0, Math.min(1, (rms - 0.015) / 0.3));
     
-    peakRmsRef.current = Math.max(peakRmsRef.current * 0.98, normalized); // Decay peak slightly
+    peakRmsRef.current = Math.max(peakRmsRef.current * 0.95, normalized);
     setLoudness(normalized);
     
     const freq = estimatePitch(buffer, audioCtxRef.current?.sampleRate || 44100);
     setPitchHz(freq);
 
-    // Voice Activity + Silence segmentation
+    // NEW LOGIC: Wait for user to speak -> detect -> wait 0.5s -> cast if no more speaking
     const now = Date.now();
     const voiceThreshold = 0.05;
+    
     if (normalized > voiceThreshold) {
+      // User is speaking
       if (!speakingRef.current) {
+        console.log('🎤 User started speaking');
         speakingRef.current = true;
         segmentStartedAtRef.current = now;
         segmentCastedRef.current = false;
       }
       lastVoiceAtRef.current = now;
-    } else if (speakingRef.current && now - lastVoiceAtRef.current > 800) { // Faster end detection
-      // Phrase ended: cast once using last final transcript if available
+    } else if (speakingRef.current && now - lastVoiceAtRef.current > 500) {
+      // User stopped speaking for 0.5 seconds - time to cast
+      console.log('🔇 User stopped speaking, processing...');
+      
       if (!segmentCastedRef.current && lastFinalRef.current && lastFinalRef.current.time >= segmentStartedAtRef.current) {
         const { transcript, confidence } = lastFinalRef.current;
         const normalizedTranscript = normalize(transcript);
-        const tooSoon = (now - lastCastAtRef.current) < 500; // Reduced to 500ms for responsiveness
-        const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 1500); // Reduced duplicate window
         
-        if (!tooSoon && !isDuplicate) {
+        // Check if enough time passed since last cast
+        const timeSinceLastCast = now - lastCastAtRef.current;
+        if (timeSinceLastCast < 1000) {
+          console.log(`⏱️ Too soon since last cast (${timeSinceLastCast}ms)`);
+        } else if (normalizedTranscript.length < 2) {
+          console.log('📝 Transcript too short');
+        } else {
           console.log(`🎙️ Processing speech: "${transcript}" (confidence: ${confidence.toFixed(2)})`);
           
+          // Find best spell match
           let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
           for (const spell of spells) {
             const aliases = (spell as any).aliases || [];
@@ -311,50 +321,57 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             const spellName = spell.canonical || spell.displayName;
             const detail = computeScores(spellName, transcript, aliases, phonemes);
             const score = detail.accuracy / 100;
-            if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = { spell, score, detail };
+            }
           }
           
           if (bestMatch) {
             console.log(`🔍 Best match: ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% accuracy)`);
+            
+            // Cast spell if accuracy is good enough
+            if (bestMatch.score >= 0.05) { // Very low threshold for easy casting
+              const key = bestMatch.spell.id;
+              const lastSpellCast = lastSpellCastAtRef.current[key] ?? 0;
+              
+              if (now - lastSpellCast >= 500) { // 500ms cooldown per spell
+                const power = clamp01(0.6 + 0.4 * bestMatch.score) * (0.7 + 0.3 * peakRmsRef.current);
+                const result: PronunciationResult = {
+                  transcript,
+                  confidence,
+                  accuracy: bestMatch.detail.accuracy,
+                  phoneticScore: bestMatch.detail.phoneticScore,
+                  loudness: peakRmsRef.current,
+                  letters: bestMatch.detail.letters,
+                };
+                
+                console.log(`✨ CASTING SPELL: "${transcript}" → ${bestMatch.spell.displayName} (power: ${power.toFixed(2)})`);
+                
+                setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
+                lastSpellCastAtRef.current[key] = now;
+                lastCastAtRef.current = now;
+                lastTranscriptRef.current = normalizedTranscript;
+                segmentCastedRef.current = true;
+              } else {
+                console.log(`⏳ Spell cooldown: ${bestMatch.spell.displayName} (${now - lastSpellCast}ms ago)`);
+              }
+            } else {
+              console.log(`❌ Accuracy too low: ${(bestMatch.score * 100).toFixed(1)}%`);
+            }
           } else {
             console.log(`❌ No spell matches found for: "${transcript}"`);
           }
-          
-          // Use ultra-low thresholds for easier casting
-          if (bestMatch && bestMatch.score >= 0.08) { // SUPER LOW threshold
-            const key = bestMatch.spell.id;
-            const lastAt = lastSpellCastAtRef.current[key] ?? 0;
-            if (now - lastAt >= 300) { // Even faster cooldown
-              const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
-              const result: PronunciationResult = {
-                transcript,
-                confidence,
-                accuracy: bestMatch.detail.accuracy,
-                phoneticScore: bestMatch.detail.phoneticScore,
-                loudness: peakRmsRef.current,
-                letters: bestMatch.detail.letters,
-              };
-              
-              console.log(`🎯 SPELL DETECTED: "${transcript}" → ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% match)`);
-              
-              setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
-              lastSpellCastAtRef.current[key] = now;
-              lastCastAtRef.current = now;
-              lastTranscriptRef.current = normalizedTranscript;
-              lastFinalRef.current = null;
-            } else {
-              console.log(`⏳ Same spell cooldown: ${bestMatch.spell.displayName} (${now - lastAt}ms ago)`);
-              // Within same-spell cooldown: do not cast, but consume this segment
-              lastTranscriptRef.current = normalizedTranscript;
-              lastFinalRef.current = null;
-            }
-          }
         }
+        
+        // Clear the final result to prevent re-processing
+        lastFinalRef.current = null;
       }
-      // Reset for next segment
+      
+      // Reset speaking state - ready for next detection
       speakingRef.current = false;
       segmentCastedRef.current = true;
       peakRmsRef.current = 0;
+      console.log('🔄 Ready for next speech detection');
     }
     
     rafRef.current = requestAnimationFrame(measure);
