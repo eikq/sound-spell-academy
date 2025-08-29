@@ -406,29 +406,51 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
       };
 
       recognition.onerror = (ev: any) => {
-        console.error("Speech recognition error:", ev.error);
-        setError(`Speech error: ${ev.error}`);
+        // Only log non-aborted errors to reduce spam
+        if (ev.error !== 'aborted') {
+          console.error("Speech recognition error:", ev.error);
+          setError(`Speech error: ${ev.error}`);
+        }
+        
+        // Don't restart on certain errors
+        if (['not-allowed', 'service-not-allowed', 'network'].includes(ev.error)) {
+          shouldListenRef.current = false;
+          setListening(false);
+        }
       };
 
       recognition.onend = () => {
-        if (shouldListenRef.current && recognitionRef.current) {
-          // Reduce restart frequency to prevent lag
+        // Only restart if we should be listening and recognition hasn't been stopped
+        if (shouldListenRef.current && recognitionRef.current === recognition) {
           setTimeout(() => {
             try {
-              if (shouldListenRef.current && recognitionRef.current) {
+              if (shouldListenRef.current && recognitionRef.current === recognition) {
                 recognitionRef.current.start();
               }
             } catch (e) {
-              console.warn("Failed to restart recognition:", e);
+              // Silently fail restart attempts to prevent spam
+              if (e instanceof Error && !e.message.includes('already started')) {
+                console.warn("Failed to restart recognition:", e.message);
+              }
             }
-          }, 300); // Increased delay to reduce conflicts
+          }, 500); // Longer delay to prevent conflicts
         }
       };
 
       recognitionRef.current = recognition;
       shouldListenRef.current = true;
       setListening(true);
-      recognition.start();
+      
+      // Start with error handling
+      try {
+        recognition.start();
+      } catch (e) {
+        console.error("Failed to start speech recognition:", e);
+        setError("Failed to start speech recognition");
+        setListening(false);
+        shouldListenRef.current = false;
+        stopAudio();
+      }
     } catch (e: any) {
       console.error("Auto-spell start error:", e);
       setError(e?.message || "Failed to access microphone");
@@ -440,9 +462,11 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   const stop = useCallback(() => {
     shouldListenRef.current = false;
     setListening(false);
+    setError(null);
+    
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.stop();
+        recognitionRef.current.abort(); // Use abort() instead of stop() for immediate termination
       } catch (e) {}
       recognitionRef.current = null;
     }
