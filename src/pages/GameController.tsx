@@ -147,6 +147,11 @@ const GameController = () => {
   const { listening, start, stop, result, error, loudness, pitchHz, micGranted } = useSpeechRecognition();
   const auto = useAutoSpell(spellsData, { minAccuracy: settings.sensitivity * 30, minConfidence: 0.2 }); // Ultra-easy thresholds
   
+  // DEBUG: Log spells data on mount
+  useEffect(() => {
+    console.log(`📚 Loaded ${spellsData.length} spells for auto-cast:`, spellsData.map(s => s.displayName).slice(0, 5));
+  }, []);
+  
   // Mana system
   const playerMana = useManaSystem({
     currentMana: player.mana,

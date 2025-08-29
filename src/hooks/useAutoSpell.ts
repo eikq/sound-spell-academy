@@ -302,6 +302,8 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
         const isDuplicate = normalizedTranscript && lastTranscriptRef.current === normalizedTranscript && ((now - lastCastAtRef.current) < 1500); // Reduced duplicate window
         
         if (!tooSoon && !isDuplicate) {
+          console.log(`🎙️ Processing speech: "${transcript}" (confidence: ${confidence.toFixed(2)})`);
+          
           let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
           for (const spell of spells) {
             const aliases = (spell as any).aliases || [];
@@ -312,11 +314,17 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             if (!bestMatch || score > bestMatch.score) bestMatch = { spell, score, detail };
           }
           
+          if (bestMatch) {
+            console.log(`🔍 Best match: ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% accuracy)`);
+          } else {
+            console.log(`❌ No spell matches found for: "${transcript}"`);
+          }
+          
           // BUG FIX: Check if bestMatch exists and use ultra-low thresholds
-          if (bestMatch && bestMatch.score >= 0.15) { // Ultra-low threshold - cast almost anything!
+          if (bestMatch && bestMatch.score >= 0.10) { // EVEN LOWER threshold - cast almost anything!
             const key = bestMatch.spell.id;
             const lastAt = lastSpellCastAtRef.current[key] ?? 0;
-            if (now - lastAt >= 800) { // Fast cooldown for responsiveness
+            if (now - lastAt >= 500) { // Faster cooldown for better responsiveness
               const power = clamp01(0.7 * bestMatch.score + 0.3 * peakRmsRef.current);
               const result: PronunciationResult = {
                 transcript,
@@ -326,12 +334,17 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
                 loudness: peakRmsRef.current,
                 letters: bestMatch.detail.letters,
               };
+              
+              // ADD DEBUG LOGGING
+              console.log(`🎯 SPELL DETECTED: "${transcript}" → ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% match)`);
+              
               setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
               lastSpellCastAtRef.current[key] = now;
               lastCastAtRef.current = now;
               lastTranscriptRef.current = normalizedTranscript;
               lastFinalRef.current = null;
             } else {
+              console.log(`⏳ Same spell cooldown: ${bestMatch.spell.displayName} (${now - lastAt}ms ago)`);
               // Within same-spell cooldown: do not cast, but consume this segment
               lastTranscriptRef.current = normalizedTranscript;
               lastFinalRef.current = null;
