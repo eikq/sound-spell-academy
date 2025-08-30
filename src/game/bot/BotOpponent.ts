@@ -15,7 +15,7 @@ export class BotOpponent {
     // Improve bot configuration for better combat
     this.config = {
       ...config,
-      castInterval: [1500, 3000], // Faster casting: 1.5-3 seconds
+      castInterval: [1000, 2000], // Even faster casting: 1-2 seconds
       accuracy: [0.7, 0.95], // Higher accuracy: 70-95%
       difficulty: config.difficulty || 'medium'
     };
@@ -48,7 +48,7 @@ export class BotOpponent {
     if (!this.isActive) return;
     
     // Faster bot mana regeneration to match player
-    this.mana = Math.min(100, this.mana + 8); // Much faster regen to match player
+    this.mana = Math.min(100, this.mana + 10); // Even faster regen to match player
     
     const [minInterval, maxInterval] = this.config.castInterval;
     const interval = minInterval + Math.random() * (maxInterval - minInterval);

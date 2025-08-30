@@ -330,7 +330,7 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
             console.log(`🔍 Best match: ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% accuracy)`);
             
             // Cast spell if accuracy is good enough
-            if (bestMatch.score >= 0.05) { // Very low threshold for easy casting
+            if (bestMatch.score >= 0.08) { // Slightly higher threshold for more reliable casting
               const key = bestMatch.spell.id;
               const lastSpellCast = lastSpellCastAtRef.current[key] ?? 0;
               
@@ -422,34 +422,74 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
       };
 
       recognition.onerror = (ev: any) => {
-        // Only log non-aborted errors to reduce spam
-        if (ev.error !== 'aborted') {
-          console.error("Speech recognition error:", ev.error);
-          setError(`Speech error: ${ev.error}`);
+        console.log(`🔴 Speech recognition error: ${ev.error}`);
+        
+        // Handle different error types appropriately
+        if (ev.error === 'aborted') {
+          // Aborted is normal when stopping - don't show error
+          console.log('🔇 Speech recognition aborted (normal)');
+          return;
         }
         
-        // Don't restart on certain errors
-        if (['not-allowed', 'service-not-allowed', 'network'].includes(ev.error)) {
+        if (ev.error === 'no-speech') {
+          // No speech detected - this is normal, just continue
+          console.log('🔇 No speech detected (continuing...)');
+          return;
+        }
+        
+        if (ev.error === 'audio-capture') {
+          console.error('🎤 Audio capture error - mic might be in use');
+          setError('Microphone is busy or unavailable');
           shouldListenRef.current = false;
           setListening(false);
+          return;
         }
+        
+        if (['not-allowed', 'service-not-allowed'].includes(ev.error)) {
+          console.error('🚫 Microphone permission denied');
+          setError('Microphone permission denied');
+          shouldListenRef.current = false;
+          setListening(false);
+          return;
+        }
+        
+        if (ev.error === 'network') {
+          console.error('🌐 Network error for speech recognition');
+          setError('Network error - check your connection');
+          shouldListenRef.current = false;
+          setListening(false);
+          return;
+        }
+        
+        // For other errors, just log but don't stop the system
+        console.warn(`⚠️ Speech recognition warning: ${ev.error} (continuing...)`);
       };
 
       recognition.onend = () => {
-        // Only restart if we should be listening and recognition hasn't been stopped
+        console.log('🔄 Speech recognition ended');
+        
+        // Only restart if we should be listening and recognition hasn't been manually stopped
         if (shouldListenRef.current && recognitionRef.current === recognition) {
+          console.log('🔄 Attempting to restart speech recognition...');
+          
+          // Add a small delay to prevent rapid restart cycles
           setTimeout(() => {
-            try {
-              if (shouldListenRef.current && recognitionRef.current === recognition) {
+            if (shouldListenRef.current && recognitionRef.current === recognition) {
+              try {
+                console.log('🎤 Restarting speech recognition...');
                 recognitionRef.current.start();
-              }
-            } catch (e) {
-              // Silently fail restart attempts to prevent spam
-              if (e instanceof Error && !e.message.includes('already started')) {
-                console.warn("Failed to restart recognition:", e.message);
+              } catch (e) {
+                if (e instanceof Error) {
+                  if (e.message.includes('already started')) {
+                    console.log('🔄 Speech recognition already started, skipping restart');
+                  } else {
+                    console.warn("Failed to restart recognition:", e.message);
+                    // Don't set error for restart failures, just log
+                  }
+                }
               }
             }
-          }, 500); // Longer delay to prevent conflicts
+          }, 100); // Shorter delay for more responsive restart
         }
       };
 
@@ -476,17 +516,23 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
   }, [listening, setupAudio, stopAudio, spells, minAccuracy, minConfidence, measure]);
 
   const stop = useCallback(() => {
+    console.log('🛑 Stopping auto-spell system...');
     shouldListenRef.current = false;
     setListening(false);
     setError(null);
     
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.abort(); // Use abort() instead of stop() for immediate termination
-      } catch (e) {}
+        console.log('🔇 Aborting speech recognition...');
+        recognitionRef.current.abort(); // Use abort() for immediate termination
+      } catch (e) {
+        console.log('⚠️ Error aborting recognition (probably already stopped)');
+      }
       recognitionRef.current = null;
     }
+    
     stopAudio();
+    console.log('✅ Auto-spell system stopped');
   }, [stopAudio]);
 
   useEffect(() => {

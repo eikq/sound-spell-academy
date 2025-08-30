@@ -157,7 +157,7 @@ const GameController = () => {
     currentMana: player.mana,
     maxMana: 100,
     onManaChange: (newMana) => setPlayer(prev => ({ ...prev, mana: Math.round(newMana) })),
-    regenRate: 3, // 3 mana per second
+    regenRate: 10, // 10 mana per second
     enabled: true
   });
   
@@ -165,7 +165,7 @@ const GameController = () => {
     currentMana: opponent.mana,
     maxMana: 100,
     onManaChange: (newMana) => setOpponent(prev => ({ ...prev, mana: Math.round(newMana) })),
-    regenRate: 2.5, // Slightly slower for opponent
+    regenRate: 10, // Same speed as player for bot
     enabled: vsBot
   });
   
