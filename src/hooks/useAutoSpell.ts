@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { distance } from "fastest-levenshtein";
 import doubleMetaphone from "double-metaphone";
@@ -8,6 +7,7 @@ import type { PronunciationResult } from "@/hooks/useSpeech";
 
 const dmp = new DiffMatchPatch();
 
+// Normalize text for comparison
 function normalize(s: string) {
   return s
     .toLowerCase()
@@ -16,6 +16,7 @@ function normalize(s: string) {
     .trim();
 }
 
+// Create letter-by-letter highlights
 function letterHighlights(target: string, spoken: string) {
   const diffs = dmp.diff_main(target, spoken);
   dmp.diff_cleanupSemantic(diffs as any);
@@ -37,16 +38,17 @@ function letterHighlights(target: string, spoken: string) {
   return letters;
 }
 
+// Calculate accuracy scores
 function computeScores(targetPhrase: string, spokenPhrase: string, aliases: string[] = [], phonemes: string[] = []) {
   const t = normalize(targetPhrase);
   const s = normalize(spokenPhrase);
 
-  // Direct name matching (weight: 0.55)
+  // Direct name matching (60% weight)
   const maxLen = Math.max(t.length, s.length) || 1;
   const charDist = distance(t, s);
   const nameAcc = 1 - charDist / maxLen;
 
-  // Alias matching (weight: 0.25)
+  // Alias matching (25% weight)
   let aliasAcc = 0;
   for (const alias of aliases) {
     const aliasNorm = normalize(alias);
@@ -56,7 +58,7 @@ function computeScores(targetPhrase: string, spokenPhrase: string, aliases: stri
     aliasAcc = Math.max(aliasAcc, aliasScore);
   }
 
-  // Phoneme matching (weight: 0.20)
+  // Phoneme matching (15% weight)
   const [tPh1] = doubleMetaphone(t);
   const [sPh1] = doubleMetaphone(s);
   let phonemeAcc = 0;
@@ -78,46 +80,14 @@ function computeScores(targetPhrase: string, spokenPhrase: string, aliases: stri
     }
   }
 
-  // ULTRA-FORGIVING weighted final accuracy - cast almost anything!
-  const accuracy = Math.max(0, Math.min(1, 0.40 * nameAcc + 0.35 * aliasAcc + 0.25 * phonemeAcc)); // More weight on aliases
+  // Weighted final accuracy
+  const accuracy = Math.max(0, Math.min(1, 0.60 * nameAcc + 0.25 * aliasAcc + 0.15 * phonemeAcc));
   const letters = letterHighlights(t, s);
   return { accuracy: accuracy * 100, phoneticScore: phonemeAcc * 100, letters };
 }
 
-const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
-
-export function getBestMatch(spells: Spell[], result: { transcript: string; loudness: number; confidence: number }, displayMode: 'canon' | 'original' = 'canon') {
-  if (!result.transcript) return null;
-  
-  let bestMatch: { spell: Spell; accuracy: number; confidence: number; chargeTier: number; power: number } | null = null;
-  
-  for (const spell of spells) {
-    const aliases = (spell as any).aliases || [];
-    const phonemes = (spell as any).phonemes || [];
-    const spellName = displayMode === 'canon' ? spell.canonical : spell.displayName;
-    const detail = computeScores(spellName, result.transcript, aliases, phonemes);
-    const accuracy = detail.accuracy / 100;
-    
-    // ULTRA-EASY casting thresholds - cast almost anything!
-    const thresholds = { 1: 0.20, 2: 0.25, 3: 0.30, 4: 0.35, 5: 0.40 }; // Extremely low thresholds
-    const threshold = thresholds[spell.difficulty] || 0.25; // Very low default threshold
-    
-    if (accuracy >= threshold && result.confidence >= 0.2) { // Extremely low confidence requirement
-      const basePower = (spell as any).basePower || 1.0;
-      const power = basePower * (0.6 + 0.4 * accuracy) * (0.9 + 0.2 * result.loudness);
-      const clampedPower = Math.max(0.4, Math.min(2.0, power));
-      const chargeTier = result.loudness > 0.7 ? 2 : result.loudness > 0.4 ? 1 : 0;
-      
-      if (!bestMatch || accuracy > bestMatch.accuracy) {
-        bestMatch = { spell, accuracy, confidence: result.confidence, chargeTier, power: clampedPower };
-      }
-    }
-  }
-  
-  return bestMatch;
-}
-
 export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; minConfidence?: number }) {
+  // State management
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loudness, setLoudness] = useState(0);
@@ -129,427 +99,406 @@ export function useAutoSpell(spells: Spell[], opts?: { minAccuracy?: number; min
     timestamp: number;
   }>(null);
 
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const peakRmsRef = useRef(0);
-  const recognitionRef = useRef<any>(null);
-  const isStartingRef = useRef(false);
-  const lastCastAtRef = useRef(0);
-  const lastTranscriptRef = useRef("");
-  const speakingRef = useRef(false);
-  const lastVoiceAtRef = useRef(0);
-  const segmentStartedAtRef = useRef(0);
-  const segmentCastedRef = useRef(false);
-  const lastFinalRef = useRef<{ transcript: string; confidence: number; time: number } | null>(null);
-  const shouldListenRef = useRef(false);
-  const lastSpellCastAtRef = useRef<Record<string, number>>({});
+  // Audio and recognition refs
+  const audioContext = useRef<AudioContext | null>(null);
+  const analyser = useRef<AnalyserNode | null>(null);
+  const microphone = useRef<MediaStreamAudioSourceNode | null>(null);
+  const mediaStream = useRef<MediaStream | null>(null);
+  const recognition = useRef<any>(null);
+  const animationFrame = useRef<number | null>(null);
   
-  const minAccuracy = opts?.minAccuracy ?? 0.25; // Ultra-low for maximum ease
-  const minConfidence = opts?.minConfidence ?? 0.2; // Very low confidence requirement
+  // Control refs
+  const isActive = useRef(false);
+  const isSpeaking = useRef(false);
+  const lastSpeechTime = useRef(0);
+  const segmentStartTime = useRef(0);
+  const hasProcessedSegment = useRef(false);
+  const lastProcessedTranscript = useRef("");
+  const spellCooldowns = useRef<Record<string, number>>({});
+  
+  const minAccuracy = opts?.minAccuracy ?? 0.15;
+  const minConfidence = opts?.minConfidence ?? 0.2;
 
+  // Setup audio context and microphone
   const setupAudio = useCallback(async () => {
-    if (audioCtxRef.current || isStartingRef.current) return;
-    
     try {
-      isStartingRef.current = true;
+      console.log("🎤 Setting up audio...");
+      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { 
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          sampleRate: 44100
         } 
       });
       
-      streamRef.current = stream;
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      mediaStream.current = stream;
       
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (ctx.state === 'suspended') {
+        await ctx.resume();
       }
       
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.8;
+      const analyserNode = ctx.createAnalyser();
+      analyserNode.fftSize = 2048;
+      analyserNode.smoothingTimeConstant = 0.8;
       
-      const mic = audioCtx.createMediaStreamSource(stream);
-      mic.connect(analyser);
+      const mic = ctx.createMediaStreamSource(stream);
+      mic.connect(analyserNode);
       
-      audioCtxRef.current = audioCtx;
-      analyserRef.current = analyser;
-      micSourceRef.current = mic;
-    } finally {
-      isStartingRef.current = false;
+      audioContext.current = ctx;
+      analyser.current = analyserNode;
+      microphone.current = mic;
+      
+      console.log("✅ Audio setup complete");
+    } catch (err) {
+      console.error("❌ Audio setup failed:", err);
+      throw err;
     }
   }, []);
 
-  const stopAudio = useCallback(() => {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+  // Cleanup audio
+  const cleanupAudio = useCallback(() => {
+    console.log("🧹 Cleaning up audio...");
+    
+    if (animationFrame.current) {
+      cancelAnimationFrame(animationFrame.current);
+      animationFrame.current = null;
     }
     
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    
-    if (micSourceRef.current) {
+    if (microphone.current) {
       try {
-        micSourceRef.current.disconnect();
+        microphone.current.disconnect();
       } catch (e) {}
-      micSourceRef.current = null;
+      microphone.current = null;
     }
     
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+    if (audioContext.current) {
+      audioContext.current.close().catch(() => {});
+      audioContext.current = null;
     }
     
-    analyserRef.current = null;
-    isStartingRef.current = false;
+    if (mediaStream.current) {
+      mediaStream.current.getTracks().forEach(track => track.stop());
+      mediaStream.current = null;
+    }
+    
+    analyser.current = null;
   }, []);
 
-  const estimatePitch = useCallback((buf: Float32Array, sampleRate: number): number | null => {
-    const SIZE = buf.length;
-    let rms = 0;
-    for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
-    rms = Math.sqrt(rms / SIZE);
-    if (rms < 0.008) return null; // Lower threshold for better detection
-
-    // Improved autocorrelation
-    let r1 = 0, r2 = SIZE - 1;
-    const thres = rms * 0.3;
-    for (let i = 0; i < SIZE / 2; i++) {
-      if (Math.abs(buf[i]) < thres) { r1 = i; break; }
+  // Audio analysis loop
+  const analyzeAudio = useCallback(() => {
+    if (!analyser.current || !isActive.current) return;
+    
+    const bufferLength = analyser.current.fftSize;
+    const dataArray = new Float32Array(bufferLength);
+    analyser.current.getFloatTimeDomainData(dataArray);
+    
+    // Calculate RMS (loudness)
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      sum += dataArray[i] * dataArray[i];
     }
-    for (let i = 1; i < SIZE / 2; i++) {
-      if (Math.abs(buf[SIZE - i]) < thres) { r2 = SIZE - i; break; }
-    }
-
-    const buf2 = buf.slice(r1, r2);
-    if (buf2.length < 100) return null;
+    const rms = Math.sqrt(sum / bufferLength);
+    const normalizedLoudness = Math.max(0, Math.min(1, (rms - 0.01) / 0.15));
     
-    const autocorr = new Array(buf2.length).fill(0);
-    for (let lag = 0; lag < buf2.length; lag++) {
-      for (let i = 0; i < buf2.length - lag; i++) {
-        autocorr[lag] += buf2[i] * (buf2[i + lag] || 0);
-      }
-    }
-
-    let d = 0;
-    while (d < autocorr.length - 1 && autocorr[d] > autocorr[d + 1]) d++;
+    setLoudness(normalizedLoudness);
     
-    let max = -1, maxPos = -1;
-    for (let i = d; i < buf2.length; i++) {
-      if (autocorr[i] > max) { max = autocorr[i]; maxPos = i; }
-    }
-    
-    if (maxPos <= 0 || max < autocorr[0] * 0.3) return null;
-
-    // Parabolic interpolation
-    const x1 = autocorr[maxPos - 1] || 0;
-    const x2 = autocorr[maxPos];
-    const x3 = autocorr[maxPos + 1] || 0;
-    const a = (x1 + x3 - 2 * x2) / 2;
-    const b = (x3 - x1) / 2;
-    const shift = a !== 0 ? -b / (2 * a) : 0;
-    const period = maxPos + shift;
-    
-    if (!period || period === Infinity) return null;
-    const freq = sampleRate / period;
-    return (freq >= 60 && freq <= 500) ? freq : null;
-  }, []);
-
-  const measure = useCallback(() => {
-    const analyser = analyserRef.current;
-    if (!analyser) return;
-    
-    const buffer = new Float32Array(analyser.fftSize);
-    analyser.getFloatTimeDomainData(buffer);
-    
-    let sumSquares = 0;
-    for (let i = 0; i < buffer.length; i++) {
-      sumSquares += buffer[i] * buffer[i];
-    }
-    const rms = Math.sqrt(sumSquares / buffer.length);
-    const normalized = Math.max(0, Math.min(1, (rms - 0.015) / 0.3));
-    
-    peakRmsRef.current = Math.max(peakRmsRef.current * 0.95, normalized);
-    setLoudness(normalized);
-    
-    const freq = estimatePitch(buffer, audioCtxRef.current?.sampleRate || 44100);
-    setPitchHz(freq);
-
-    // NEW LOGIC: Wait for user to speak -> detect -> wait 0.5s -> cast if no more speaking
-    const now = Date.now();
-    const voiceThreshold = 0.05;
-    
-    if (normalized > voiceThreshold) {
-      // User is speaking
-      if (!speakingRef.current) {
-        console.log('🎤 User started speaking');
-        speakingRef.current = true;
-        segmentStartedAtRef.current = now;
-        segmentCastedRef.current = false;
-      }
-      lastVoiceAtRef.current = now;
-    } else if (speakingRef.current && now - lastVoiceAtRef.current > 500) {
-      // User stopped speaking for 0.5 seconds - time to cast
-      console.log('🔇 User stopped speaking, processing...');
+    // Simple pitch detection
+    const sampleRate = audioContext.current?.sampleRate || 44100;
+    let pitch = null;
+    if (rms > 0.01) {
+      // Basic autocorrelation for pitch
+      const threshold = 0.3;
+      let maxCorr = 0;
+      let bestPeriod = 0;
       
-      if (!segmentCastedRef.current && lastFinalRef.current && lastFinalRef.current.time >= segmentStartedAtRef.current) {
-        const { transcript, confidence } = lastFinalRef.current;
-        const normalizedTranscript = normalize(transcript);
+      for (let period = 50; period < 500; period++) {
+        let correlation = 0;
+        for (let i = 0; i < bufferLength - period; i++) {
+          correlation += dataArray[i] * dataArray[i + period];
+        }
+        if (correlation > maxCorr) {
+          maxCorr = correlation;
+          bestPeriod = period;
+        }
+      }
+      
+      if (bestPeriod > 0 && maxCorr > threshold) {
+        pitch = sampleRate / bestPeriod;
+        if (pitch < 80 || pitch > 400) pitch = null; // Filter out invalid pitches
+      }
+    }
+    
+    setPitchHz(pitch);
+    
+    // Speech detection logic
+    const now = Date.now();
+    const speechThreshold = 0.03;
+    const silenceTimeout = 500; // 500ms of silence before processing
+    
+    if (normalizedLoudness > speechThreshold) {
+      if (!isSpeaking.current) {
+        console.log("🗣️ Speech started");
+        isSpeaking.current = true;
+        segmentStartTime.current = now;
+        hasProcessedSegment.current = false;
+      }
+      lastSpeechTime.current = now;
+    } else if (isSpeaking.current && (now - lastSpeechTime.current) > silenceTimeout) {
+      console.log("🔇 Speech ended, processing...");
+      isSpeaking.current = false;
+      
+      // Will be processed by speech recognition results
+    }
+    
+    animationFrame.current = requestAnimationFrame(analyzeAudio);
+  }, []);
+
+  // Setup speech recognition
+  const setupSpeechRecognition = useCallback(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      throw new Error("Speech Recognition not supported");
+    }
+    
+    const speechRecognition = new SpeechRecognition();
+    speechRecognition.continuous = true;
+    speechRecognition.interimResults = true;
+    speechRecognition.lang = "en-US";
+    speechRecognition.maxAlternatives = 3;
+    
+    let finalTranscript = "";
+    let lastFinalTime = 0;
+    
+    speechRecognition.onresult = (event: any) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
         
-        // Check if enough time passed since last cast
-        const timeSinceLastCast = now - lastCastAtRef.current;
-        if (timeSinceLastCast < 1000) {
-          console.log(`⏱️ Too soon since last cast (${timeSinceLastCast}ms)`);
-        } else if (normalizedTranscript.length < 2) {
-          console.log('📝 Transcript too short');
-        } else {
-          console.log(`🎙️ Processing speech: "${transcript}" (confidence: ${confidence.toFixed(2)})`);
+        if (result.isFinal) {
+          let bestTranscript = "";
+          let bestConfidence = 0;
           
-          // Find best spell match
-          let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
-          for (const spell of spells) {
-            const aliases = (spell as any).aliases || [];
-            const phonemes = (spell as any).phonemes || [];
-            const spellName = spell.canonical || spell.displayName;
-            const detail = computeScores(spellName, transcript, aliases, phonemes);
-            const score = detail.accuracy / 100;
-            if (!bestMatch || score > bestMatch.score) {
-              bestMatch = { spell, score, detail };
+          // Find best alternative
+          for (let j = 0; j < Math.min(result.length, 3); j++) {
+            const alternative = result[j];
+            const transcript = (alternative.transcript || "").trim();
+            const confidence = alternative.confidence || 0;
+            
+            if (transcript.length >= 2 && confidence > bestConfidence) {
+              bestTranscript = transcript;
+              bestConfidence = confidence;
             }
           }
           
-          if (bestMatch) {
-            console.log(`🔍 Best match: ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}% accuracy)`);
+          if (bestTranscript && bestTranscript !== lastProcessedTranscript.current) {
+            finalTranscript = bestTranscript;
+            lastFinalTime = Date.now();
             
-            // Cast spell if accuracy is good enough
-            if (bestMatch.score >= 0.08) { // Slightly higher threshold for more reliable casting
-              const key = bestMatch.spell.id;
-              const lastSpellCast = lastSpellCastAtRef.current[key] ?? 0;
-              
-              if (now - lastSpellCast >= 500) { // 500ms cooldown per spell
-                const power = clamp01(0.6 + 0.4 * bestMatch.score) * (0.7 + 0.3 * peakRmsRef.current);
-                const result: PronunciationResult = {
-                  transcript,
-                  confidence,
-                  accuracy: bestMatch.detail.accuracy,
-                  phoneticScore: bestMatch.detail.phoneticScore,
-                  loudness: peakRmsRef.current,
-                  letters: bestMatch.detail.letters,
-                };
-                
-                console.log(`✨ CASTING SPELL: "${transcript}" → ${bestMatch.spell.displayName} (power: ${power.toFixed(2)})`);
-                
-                setLastDetected({ spell: bestMatch.spell, result, power, timestamp: now });
-                lastSpellCastAtRef.current[key] = now;
-                lastCastAtRef.current = now;
-                lastTranscriptRef.current = normalizedTranscript;
-                segmentCastedRef.current = true;
-              } else {
-                console.log(`⏳ Spell cooldown: ${bestMatch.spell.displayName} (${now - lastSpellCast}ms ago)`);
-              }
-            } else {
-              console.log(`❌ Accuracy too low: ${(bestMatch.score * 100).toFixed(1)}%`);
+            // Process the speech if we're not already speaking
+            if (!isSpeaking.current && !hasProcessedSegment.current) {
+              processSpokenText(bestTranscript, bestConfidence, lastFinalTime);
             }
-          } else {
-            console.log(`❌ No spell matches found for: "${transcript}"`);
           }
         }
-        
-        // Clear the final result to prevent re-processing
-        lastFinalRef.current = null;
+      }
+    };
+    
+    speechRecognition.onerror = (event: any) => {
+      console.log(`🔴 Speech error: ${event.error}`);
+      
+      // Handle specific errors
+      if (event.error === 'aborted' || event.error === 'no-speech') {
+        // These are normal, don't show error
+        return;
       }
       
-      // Reset speaking state - ready for next detection
-      speakingRef.current = false;
-      segmentCastedRef.current = true;
-      peakRmsRef.current = 0;
-      console.log('🔄 Ready for next speech detection');
+      if (['not-allowed', 'service-not-allowed'].includes(event.error)) {
+        setError('Microphone permission denied');
+        isActive.current = false;
+        setListening(false);
+        return;
+      }
+      
+      if (event.error === 'network') {
+        setError('Network error - check connection');
+        return;
+      }
+      
+      // For other errors, just log
+      console.warn(`⚠️ Speech warning: ${event.error}`);
+    };
+    
+    speechRecognition.onend = () => {
+      console.log("🔄 Speech recognition ended");
+      
+      if (isActive.current) {
+        // Restart after a short delay
+        setTimeout(() => {
+          if (isActive.current && recognition.current) {
+            try {
+              console.log("🔄 Restarting speech recognition");
+              recognition.current.start();
+            } catch (e) {
+              console.warn("Failed to restart speech recognition:", e);
+            }
+          }
+        }, 100);
+      }
+    };
+    
+    return speechRecognition;
+  }, []);
+
+  // Process spoken text and find spell matches
+  const processSpokenText = useCallback((transcript: string, confidence: number, timestamp: number) => {
+    if (hasProcessedSegment.current) return;
+    
+    console.log(`🎙️ Processing: "${transcript}" (confidence: ${confidence.toFixed(2)})`);
+    
+    const now = Date.now();
+    let bestMatch: { spell: Spell; score: number; detail: ReturnType<typeof computeScores> } | null = null;
+    
+    // Find best spell match
+    for (const spell of spells) {
+      const aliases = (spell as any).aliases || [];
+      const phonemes = (spell as any).phonemes || [];
+      const spellName = spell.canonical || spell.displayName;
+      const detail = computeScores(spellName, transcript, aliases, phonemes);
+      const score = detail.accuracy / 100;
+      
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { spell, score, detail };
+      }
     }
     
-    rafRef.current = requestAnimationFrame(measure);
-  }, [estimatePitch, spells, minAccuracy, minConfidence]);
+    if (!bestMatch) {
+      console.log("❌ No spell matches found");
+      return;
+    }
+    
+    console.log(`🔍 Best match: ${bestMatch.spell.displayName} (${(bestMatch.score * 100).toFixed(1)}%)`);
+    
+    // Check if accuracy is sufficient
+    if (bestMatch.score < minAccuracy || confidence < minConfidence) {
+      console.log(`❌ Accuracy/confidence too low: ${(bestMatch.score * 100).toFixed(1)}%/${(confidence * 100).toFixed(1)}%`);
+      return;
+    }
+    
+    // Check spell cooldown
+    const spellKey = bestMatch.spell.id;
+    const lastCast = spellCooldowns.current[spellKey] || 0;
+    const cooldownTime = 500; // 500ms per spell
+    
+    if (now - lastCast < cooldownTime) {
+      console.log(`⏳ Spell on cooldown: ${bestMatch.spell.displayName}`);
+      return;
+    }
+    
+    // Cast the spell!
+    const power = Math.max(0.4, Math.min(1.0, 0.7 + 0.3 * bestMatch.score));
+    
+    const result: PronunciationResult = {
+      transcript,
+      confidence,
+      accuracy: bestMatch.detail.accuracy,
+      phoneticScore: bestMatch.detail.phoneticScore,
+      loudness: loudness,
+      letters: bestMatch.detail.letters,
+    };
+    
+    console.log(`✨ CASTING: ${bestMatch.spell.displayName} (power: ${power.toFixed(2)})`);
+    
+    setLastDetected({
+      spell: bestMatch.spell,
+      result,
+      power,
+      timestamp: now
+    });
+    
+    spellCooldowns.current[spellKey] = now;
+    lastProcessedTranscript.current = transcript;
+    hasProcessedSegment.current = true;
+    
+  }, [spells, minAccuracy, minConfidence, loudness]);
 
+  // Start the auto-spell system
   const start = useCallback(async () => {
-    if (listening || isStartingRef.current) return;
+    if (isActive.current) {
+      console.log("⚠️ Auto-spell already active");
+      return;
+    }
     
     try {
+      console.log("🚀 Starting auto-spell system...");
       setError(null);
+      
       await setupAudio();
       
-      peakRmsRef.current = 0;
-      measure();
-
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        throw new Error("Speech Recognition not supported in this browser.");
-      }
-
-      const recognition = new SpeechRecognition();
-      recognition.lang = "en-US";
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 3; // Get multiple alternatives
-      recognition.continuous = true;
-
-      let lastProcessTime = 0;
-      const PROCESS_THROTTLE = 100; // ms
-
-      recognition.onresult = (ev: any) => {
-        const now = Date.now();
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          const res = ev.results[i];
-          if (!res.isFinal) continue;
-          // Choose best alternative by confidence
-          let bestAlt: { transcript: string; confidence: number } | null = null;
-          for (let j = 0; j < Math.min(res.length, 3); j++) {
-            const alt = res[j];
-            const t = String(alt.transcript || "").trim();
-            const c = Number(alt.confidence || 0);
-            if (t.length < 2) continue;
-            if (!bestAlt || c > bestAlt.confidence) bestAlt = { transcript: t, confidence: c };
-          }
-          if (bestAlt) {
-            lastFinalRef.current = { transcript: bestAlt.transcript, confidence: bestAlt.confidence, time: now };
-          }
-        }
-      };
-
-      recognition.onerror = (ev: any) => {
-        console.log(`🔴 Speech recognition error: ${ev.error}`);
-        
-        // Handle different error types appropriately
-        if (ev.error === 'aborted') {
-          // Aborted is normal when stopping - don't show error
-          console.log('🔇 Speech recognition aborted (normal)');
-          return;
-        }
-        
-        if (ev.error === 'no-speech') {
-          // No speech detected - this is normal, just continue
-          console.log('🔇 No speech detected (continuing...)');
-          return;
-        }
-        
-        if (ev.error === 'audio-capture') {
-          console.error('🎤 Audio capture error - mic might be in use');
-          setError('Microphone is busy or unavailable');
-          shouldListenRef.current = false;
-          setListening(false);
-          return;
-        }
-        
-        if (['not-allowed', 'service-not-allowed'].includes(ev.error)) {
-          console.error('🚫 Microphone permission denied');
-          setError('Microphone permission denied');
-          shouldListenRef.current = false;
-          setListening(false);
-          return;
-        }
-        
-        if (ev.error === 'network') {
-          console.error('🌐 Network error for speech recognition');
-          setError('Network error - check your connection');
-          shouldListenRef.current = false;
-          setListening(false);
-          return;
-        }
-        
-        // For other errors, just log but don't stop the system
-        console.warn(`⚠️ Speech recognition warning: ${ev.error} (continuing...)`);
-      };
-
-      recognition.onend = () => {
-        console.log('🔄 Speech recognition ended');
-        
-        // Only restart if we should be listening and recognition hasn't been manually stopped
-        if (shouldListenRef.current && recognitionRef.current === recognition) {
-          console.log('🔄 Attempting to restart speech recognition...');
-          
-          // Add a small delay to prevent rapid restart cycles
-          setTimeout(() => {
-            if (shouldListenRef.current && recognitionRef.current === recognition) {
-              try {
-                console.log('🎤 Restarting speech recognition...');
-                recognitionRef.current.start();
-              } catch (e) {
-                if (e instanceof Error) {
-                  if (e.message.includes('already started')) {
-                    console.log('🔄 Speech recognition already started, skipping restart');
-                  } else {
-                    console.warn("Failed to restart recognition:", e.message);
-                    // Don't set error for restart failures, just log
-                  }
-                }
-              }
-            }
-          }, 100); // Shorter delay for more responsive restart
-        }
-      };
-
-      recognitionRef.current = recognition;
-      shouldListenRef.current = true;
+      const speechRecognition = setupSpeechRecognition();
+      recognition.current = speechRecognition;
+      
+      isActive.current = true;
       setListening(true);
       
-      // Start with error handling
-      try {
-        recognition.start();
-      } catch (e) {
-        console.error("Failed to start speech recognition:", e);
-        setError("Failed to start speech recognition");
-        setListening(false);
-        shouldListenRef.current = false;
-        stopAudio();
-      }
-    } catch (e: any) {
-      console.error("Auto-spell start error:", e);
-      setError(e?.message || "Failed to access microphone");
+      // Start audio analysis
+      analyzeAudio();
+      
+      // Start speech recognition
+      speechRecognition.start();
+      
+      console.log("✅ Auto-spell system started");
+      
+    } catch (err: any) {
+      console.error("❌ Failed to start auto-spell:", err);
+      setError(err.message || "Failed to start auto-spell");
       setListening(false);
-      stopAudio();
+      isActive.current = false;
+      cleanupAudio();
     }
-  }, [listening, setupAudio, stopAudio, spells, minAccuracy, minConfidence, measure]);
+  }, [setupAudio, setupSpeechRecognition, analyzeAudio, cleanupAudio]);
 
+  // Stop the auto-spell system
   const stop = useCallback(() => {
-    console.log('🛑 Stopping auto-spell system...');
-    shouldListenRef.current = false;
+    console.log("🛑 Stopping auto-spell system...");
+    
+    isActive.current = false;
     setListening(false);
     setError(null);
     
-    if (recognitionRef.current) {
+    if (recognition.current) {
       try {
-        console.log('🔇 Aborting speech recognition...');
-        recognitionRef.current.abort(); // Use abort() for immediate termination
-      } catch (e) {
-        console.log('⚠️ Error aborting recognition (probably already stopped)');
-      }
-      recognitionRef.current = null;
+        recognition.current.abort();
+      } catch (e) {}
+      recognition.current = null;
     }
     
-    stopAudio();
-    console.log('✅ Auto-spell system stopped');
-  }, [stopAudio]);
+    cleanupAudio();
+    
+    // Reset state
+    isSpeaking.current = false;
+    hasProcessedSegment.current = false;
+    lastProcessedTranscript.current = "";
+    
+    console.log("✅ Auto-spell system stopped");
+  }, [cleanupAudio]);
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       stop();
     };
   }, [stop]);
 
-  return { 
-    listening, 
-    start, 
-    stop, 
-    error, 
-    loudness, 
-    pitchHz, 
-    lastDetected,
-    getBestMatch: (result: { transcript: string; loudness: number; confidence: number }, displayMode?: 'canon' | 'original') => 
-      getBestMatch(spells, result, displayMode)
+  return {
+    listening,
+    start,
+    stop,
+    error,
+    loudness,
+    pitchHz,
+    lastDetected
   } as const;
 }

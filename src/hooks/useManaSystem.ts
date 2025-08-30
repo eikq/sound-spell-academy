@@ -12,49 +12,73 @@ export function useManaSystem({
   currentMana,
   maxMana,
   onManaChange,
-  regenRate = 10, // Even faster: 10 mana per second
+  regenRate = 10, // 10 mana per second - fast regeneration
   enabled = true
 }: ManaSystemProps) {
-  const lastRegenTime = useRef(Date.now());
-  const animationFrame = useRef<number>();
+  const lastUpdateTime = useRef(Date.now());
+  const intervalId = useRef<NodeJS.Timeout | null>(null);
 
+  // Consume mana function
   const consumeMana = useCallback((amount: number): boolean => {
     if (!enabled) return true;
     
     if (currentMana >= amount) {
-      onManaChange(Math.max(0, currentMana - amount));
+      const newMana = Math.max(0, currentMana - amount);
+      onManaChange(newMana);
+      console.log(`💙 Mana consumed: ${amount}, remaining: ${newMana}`);
       return true;
     }
+    console.log(`❌ Insufficient mana: need ${amount}, have ${currentMana}`);
     return false;
   }, [currentMana, onManaChange, enabled]);
 
+  // Add mana function
   const addMana = useCallback((amount: number) => {
     if (!enabled) return;
-    onManaChange(Math.min(maxMana, currentMana + amount));
+    const newMana = Math.min(maxMana, currentMana + amount);
+    onManaChange(newMana);
   }, [currentMana, maxMana, onManaChange, enabled]);
 
-  // Mana regeneration loop
-  useEffect(() => {
-    if (!enabled) return;
+  // Check if can cast spell
+  const canCast = useCallback((manaCost: number): boolean => {
+    return !enabled || currentMana >= manaCost;
+  }, [currentMana, enabled]);
 
-    const regenerate = () => {
+  // Mana regeneration with reliable interval
+  useEffect(() => {
+    if (!enabled) {
+      if (intervalId.current) {
+        clearInterval(intervalId.current);
+        intervalId.current = null;
+      }
+      return;
+    }
+
+    // Clear any existing interval
+    if (intervalId.current) {
+      clearInterval(intervalId.current);
+    }
+
+    // Start new regeneration interval - 100ms updates for smooth regen
+    intervalId.current = setInterval(() => {
       const now = Date.now();
-      const deltaTime = (now - lastRegenTime.current) / 1000; // Convert to seconds
-      lastRegenTime.current = now;
+      const deltaTime = (now - lastUpdateTime.current) / 1000; // Convert to seconds
+      lastUpdateTime.current = now;
 
       if (currentMana < maxMana) {
         const regenAmount = regenRate * deltaTime;
-        onManaChange(Math.min(maxMana, currentMana + regenAmount));
+        const newMana = Math.min(maxMana, currentMana + regenAmount);
+        if (newMana !== currentMana) {
+          onManaChange(newMana);
+        }
       }
+    }, 100); // Update every 100ms for smooth regeneration
 
-      animationFrame.current = requestAnimationFrame(regenerate);
-    };
-
-    animationFrame.current = requestAnimationFrame(regenerate);
-
+    // Cleanup function
     return () => {
-      if (animationFrame.current) {
-        cancelAnimationFrame(animationFrame.current);
+      if (intervalId.current) {
+        clearInterval(intervalId.current);
+        intervalId.current = null;
       }
     };
   }, [currentMana, maxMana, onManaChange, regenRate, enabled]);
@@ -62,10 +86,6 @@ export function useManaSystem({
   return {
     consumeMana,
     addMana,
-    canCast: (manaCost: number) => !enabled || currentMana >= manaCost,
-    setEnabled: (newEnabled: boolean) => {
-      // This function doesn't actually change state, but allows calls for API consistency
-      // The enabled state should be controlled via the props.enabled parameter
-    }
+    canCast
   };
 }

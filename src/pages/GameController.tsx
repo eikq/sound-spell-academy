@@ -152,12 +152,12 @@ const GameController = () => {
     console.log(`📚 Loaded ${spellsData.length} spells for auto-cast:`, spellsData.map(s => s.displayName).slice(0, 5));
   }, []);
   
-  // Mana system
+  // Mana system with new implementation
   const playerMana = useManaSystem({
     currentMana: player.mana,
     maxMana: 100,
     onManaChange: (newMana) => setPlayer(prev => ({ ...prev, mana: Math.round(newMana) })),
-    regenRate: 10, // 10 mana per second
+    regenRate: 10, // 10 mana per second - fast regeneration
     enabled: true
   });
   
@@ -165,7 +165,7 @@ const GameController = () => {
     currentMana: opponent.mana,
     maxMana: 100,
     onManaChange: (newMana) => setOpponent(prev => ({ ...prev, mana: Math.round(newMana) })),
-    regenRate: 10, // Same speed as player for bot
+    regenRate: 10, // Same speed as player
     enabled: vsBot
   });
   
@@ -193,28 +193,35 @@ const GameController = () => {
     settingsRef.current = settings;
   }, [autoMode, settings]);
 
+  // Auto-cast system management with new implementation
   useEffect(() => {
-    // Only trigger when actually changing auto mode, not on every render
-    const shouldStart = autoMode && settings.micEnabled && !auto.listening;
-    const shouldStop = (!autoMode || !settings.micEnabled) && auto.listening;
+    if (currentScene !== 'practice' && currentScene !== 'match') {
+      // Stop auto-cast for non-active scenes
+      if (auto.listening) {
+        console.log("🔇 Stopping auto-cast - scene changed");
+        auto.stop();
+      }
+      return;
+    }
     
-    if (shouldStart) {
-      console.log("🎤 Starting auto-cast system...");
+    // Start auto-cast for active scenes
+    if (autoMode && settings.micEnabled && !auto.listening) {
+      console.log("🎤 Starting auto-cast for active scene...");
       auto.start().then(() => {
-        console.log("✅ Auto-cast system started successfully");
+        console.log("✅ Auto-cast started successfully");
         if (currentScene === 'practice' || currentScene === 'match') {
-          toast.success("🎙️ Auto-cast activated! Speak any spell name!");
+          toast.success("🎙️ Auto-cast activated! Speak spell names!");
         }
       }).catch((err) => {
-        console.error("❌ Failed to start auto-cast system:", err);
+        console.error("❌ Auto-cast failed:", err);
         setAutoMode(false);
         toast.error(`Auto-cast failed: ${err.message}`);
       });
-    } else if (shouldStop) {
-      console.log("🔇 Stopping auto-cast system...");
+    } else if ((!autoMode || !settings.micEnabled) && auto.listening) {
+      console.log("🔇 Stopping auto-cast - disabled");
       auto.stop();
     }
-  }, [autoMode, settings.micEnabled, currentScene]); // Remove auto.listening to prevent loops
+  }, [autoMode, settings.micEnabled, currentScene, auto.listening]);
   
   const normalizeKey = (s: string = "") => s.toLowerCase().replace(/[^a-z]/g, "");
 
@@ -297,14 +304,19 @@ const GameController = () => {
     
     // Auto-cast will be started by the useEffect above when autoMode is set
     
-    // Start bot immediately with proper logging
+    // Start bot with better logging and error handling
     if (botRef.current) {
-      console.log('🤖 Starting bot opponent...');
-      botRef.current.start((spell, accuracy, power) => {
-        console.log(`🤖 Bot casts ${spell.displayName} with ${accuracy}% accuracy`);
-        handleBotCast(spell, accuracy, power);
-      });
-      console.log("✅ Bot opponent started successfully");
+      console.log('🤖 Starting bot opponent with config:', botConfig);
+      try {
+        botRef.current.start((spell, accuracy, power) => {
+          console.log(`🤖 Bot callback: ${spell.displayName} (${accuracy}% accuracy, ${power.toFixed(2)} power)`);
+          handleBotCast(spell, accuracy, power);
+        });
+        console.log("✅ Bot opponent started successfully");
+      } catch (error) {
+        console.error("❌ Failed to start bot:", error);
+        toast.error("Failed to start bot opponent");
+      }
     }
   };
   
@@ -327,24 +339,21 @@ const GameController = () => {
     // Mana regeneration is controlled by the enabled prop in useManaSystem
   };
   
-  // FIXED: Bot casting with proper mana management
+  // Bot casting with improved mana management
   const handleBotCast = (spell: Spell, accuracy: number, power: number) => {
-    if (!vsBot || !botRef.current) return;
-    
-    console.log(`🤖 Bot attempting to cast ${spell.displayName} (need ${spell.manaCost}, have ${opponent.mana})`);
-    
-    // Check bot mana properly  
-    if (opponent.mana < spell.manaCost) {
-      console.log(`❌ Bot cannot cast ${spell.displayName} - insufficient mana`);
+    if (!vsBot || !botRef.current) {
+      console.log("❌ Bot cast failed - no bot or not vs bot");
       return;
     }
     
-    // Consume bot mana with proper update
-    const newBotMana = Math.max(0, opponent.mana - spell.manaCost);
-    setOpponent(prev => ({ ...prev, mana: newBotMana }));
-    opponentMana.consumeMana(spell.manaCost);
+    console.log(`🤖 Bot casting ${spell.displayName}: ${accuracy}% accuracy, ${power.toFixed(2)} power`);
     
-    console.log(`✅ Bot casts ${spell.displayName}! Mana: ${opponent.mana} → ${newBotMana}`);
+    // Bot mana is managed internally by BotOpponent class
+    const botMana = botRef.current.getMana();
+    console.log(`🤖 Bot mana after cast: ${botMana}`);
+    
+    // Update opponent state to reflect bot's internal mana
+    setOpponent(prev => ({ ...prev, mana: botMana }));
     
     // Update opponent combo
     const newCombo = ComboSystem.updateCombo(opponentCombo, spell, accuracy);

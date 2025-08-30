@@ -4,181 +4,243 @@ import spellsData from '@/game/spells/data';
 
 export class BotOpponent {
   private config: BotConfig;
-  private lastCastTime: number = 0;
-  private hp: number = 100;
-  private mana: number = 100;
   private isActive: boolean = false;
+  private mana: number = 100;
+  private hp: number = 100;
   private castCallback?: (spell: Spell, accuracy: number, power: number) => void;
-  private intervalId?: number;
+  private nextCastTimeout?: NodeJS.Timeout;
+  private manaRegenInterval?: NodeJS.Timeout;
+  private lastCastTime: number = 0;
   
   constructor(config: BotConfig) {
-    // Improve bot configuration for better combat
     this.config = {
-      ...config,
-      castInterval: [1000, 2000], // Even faster casting: 1-2 seconds
-      accuracy: [0.7, 0.95], // Higher accuracy: 70-95%
-      difficulty: config.difficulty || 'medium'
+      difficulty: config.difficulty || 'medium',
+      accuracy: config.accuracy || [0.75, 0.95],
+      castInterval: config.castInterval || [1200, 2500] // 1.2-2.5 seconds
     };
+    
+    console.log(`🤖 Bot created with difficulty: ${this.config.difficulty}`);
   }
   
   start(onCast: (spell: Spell, accuracy: number, power: number) => void) {
+    if (this.isActive) {
+      console.log("⚠️ Bot already active");
+      return;
+    }
+    
+    console.log("🚀 Starting bot opponent...");
     this.isActive = true;
     this.castCallback = onCast;
+    this.mana = 100;
+    this.hp = 100;
+    this.lastCastTime = Date.now();
+    
+    // Start mana regeneration (10 mana per second)
+    this.startManaRegen();
+    
+    // Schedule first cast
     this.scheduleNextCast();
+    
+    console.log("✅ Bot opponent started");
   }
   
   stop() {
+    console.log("🛑 Stopping bot opponent...");
     this.isActive = false;
-    if (this.intervalId) {
-      clearTimeout(this.intervalId);
+    this.castCallback = undefined;
+    
+    if (this.nextCastTimeout) {
+      clearTimeout(this.nextCastTimeout);
+      this.nextCastTimeout = undefined;
     }
+    
+    if (this.manaRegenInterval) {
+      clearInterval(this.manaRegenInterval);
+      this.manaRegenInterval = undefined;
+    }
+    
+    console.log("✅ Bot opponent stopped");
   }
   
-  takeDamage(damage: number) {
+  takeDamage(damage: number): number {
     this.hp = Math.max(0, this.hp - damage);
+    console.log(`🤖 Bot takes ${damage} damage, HP: ${this.hp}`);
     return this.hp;
   }
   
-  getHP() {
+  getHP(): number {
     return this.hp;
   }
   
-  // Add mana regeneration for bot
+  getMana(): number {
+    return this.mana;
+  }
+  
+  private startManaRegen() {
+    if (this.manaRegenInterval) {
+      clearInterval(this.manaRegenInterval);
+    }
+    
+    // Regenerate mana every 100ms (10 mana per second)
+    this.manaRegenInterval = setInterval(() => {
+      if (!this.isActive) return;
+      
+      if (this.mana < 100) {
+        this.mana = Math.min(100, this.mana + 1); // 1 mana per 100ms = 10 per second
+      }
+    }, 100);
+  }
+  
   private scheduleNextCast() {
     if (!this.isActive) return;
-    
-    // Faster bot mana regeneration to match player
-    this.mana = Math.min(100, this.mana + 10); // Even faster regen to match player
     
     const [minInterval, maxInterval] = this.config.castInterval;
     const interval = minInterval + Math.random() * (maxInterval - minInterval);
     
-    this.intervalId = setTimeout(() => {
-      if (this.isActive) { // Additional check
-        this.castSpell();
-        this.scheduleNextCast();
+    console.log(`🤖 Next cast scheduled in ${(interval/1000).toFixed(1)}s`);
+    
+    this.nextCastTimeout = setTimeout(() => {
+      if (this.isActive) {
+        this.attemptCast();
+        this.scheduleNextCast(); // Schedule next cast
       }
-    }, interval) as any;
+    }, interval);
   }
   
-  private castSpell() {
+  private attemptCast() {
     if (!this.isActive || !this.castCallback) {
-      console.log('🤖 Bot cannot cast - inactive or no callback');
+      console.log("🤖 Cannot cast - bot inactive or no callback");
       return;
     }
     
     const now = Date.now();
     
-    // Respect global cooldown - reduced for more action
+    // Global cooldown check
     if (now - this.lastCastTime < 800) {
-      console.log('🤖 Bot in global cooldown');
+      console.log("🤖 Bot in global cooldown, skipping cast");
+      return;
+    }
+    
+    // Select a spell to cast
+    const spell = this.selectSpell();
+    if (!spell) {
+      console.log("🤖 No available spells to cast");
       return;
     }
     
     // Check if bot has enough mana
-    if (this.mana < 10) {
-      console.log('🤖 Bot waiting for mana to regenerate...');
-      return;
-    }
-    
-    // Select random spell with some intelligence
-    const spell = this.selectSpell();
-    if (!spell) {
-      console.log('🤖 Bot found no available spells');
-      return;
-    }
-    
-    // Check specific spell mana cost
     if (this.mana < spell.manaCost) {
-      console.log(`🤖 Bot cannot cast ${spell.displayName} - need ${spell.manaCost}, have ${this.mana}`);
+      console.log(`🤖 Insufficient mana for ${spell.displayName}: need ${spell.manaCost}, have ${this.mana}`);
       return;
     }
     
     // Consume mana
     this.mana = Math.max(0, this.mana - spell.manaCost);
     
-    // Generate bot accuracy within configured range
+    // Generate accuracy within configured range
     const [minAcc, maxAcc] = this.config.accuracy;
-    const accuracy = minAcc + Math.random() * (maxAcc - minAcc);
+    const accuracy = Math.floor(minAcc * 100 + Math.random() * (maxAcc - minAcc) * 100);
     
-    // Add some randomness to power calculation
-    const loudness = 0.6 + Math.random() * 0.4; // 0.6-1.0
-    const power = Math.min(1.0, 0.75 * accuracy + 0.25 * loudness);
+    // Calculate power (0.6 to 1.0)
+    const power = 0.6 + Math.random() * 0.4;
     
     this.lastCastTime = now;
-    console.log(`🤖 Bot casting ${spell.displayName} with ${Math.round(accuracy * 100)}% accuracy (mana: ${this.mana})`);
-    this.castCallback(spell, Math.round(accuracy * 100), power);
+    
+    console.log(`🤖 Bot casts ${spell.displayName}! Accuracy: ${accuracy}%, Power: ${power.toFixed(2)}, Mana: ${this.mana}`);
+    
+    // Execute the cast
+    this.castCallback(spell, accuracy, power);
   }
   
   private selectSpell(): Spell | null {
-    // Filter spells by difficulty, mana cost, and preference
+    // Filter spells by mana cost and difficulty
     let availableSpells = spellsData.filter(spell => {
-      // Check mana cost first
+      // Must have enough mana
       if (spell.manaCost > this.mana) return false;
       
-      if (this.config.difficulty === 'easy') {
-        return spell.difficulty <= 2;
-      } else if (this.config.difficulty === 'medium') {
-        return spell.difficulty <= 3;
-      } else {
-        return spell.difficulty <= 5;
+      // Filter by difficulty
+      switch (this.config.difficulty) {
+        case 'easy':
+          return spell.difficulty <= 2;
+        case 'medium':
+          return spell.difficulty <= 3;
+        case 'hard':
+          return spell.difficulty <= 5;
+        default:
+          return true;
       }
     });
     
-    // Prefer offensive spells in combat
-    const offensiveSpells = availableSpells.filter(spell => 
-      spell.basePower > 0 && 
-      !['Healing', 'Utility'].includes(spell.category)
-    );
+    if (availableSpells.length === 0) {
+      console.log("🤖 No spells available for bot difficulty/mana");
+      return null;
+    }
     
-    // Use healing spells when low on HP
-    if (this.hp < 30) {
+    // Strategy selection
+    
+    // 1. Use healing if low on HP (30% chance when HP < 40)
+    if (this.hp < 40 && Math.random() < 0.3) {
       const healingSpells = availableSpells.filter(spell => 
-        spell.category === 'Healing'
+        spell.category === 'Healing' || spell.displayName.toLowerCase().includes('heal')
       );
-      if (healingSpells.length > 0 && Math.random() < 0.7) {
+      if (healingSpells.length > 0) {
+        console.log("🤖 Bot choosing healing spell");
         return healingSpells[Math.floor(Math.random() * healingSpells.length)];
       }
     }
     
-    // Use defensive spells occasionally
-    if (Math.random() < 0.2) {
+    // 2. Prefer offensive spells (80% of the time)
+    if (Math.random() < 0.8) {
+      const offensiveSpells = availableSpells.filter(spell => 
+        spell.basePower > 0 && 
+        !['Healing', 'Utility'].includes(spell.category)
+      );
+      if (offensiveSpells.length > 0) {
+        return offensiveSpells[Math.floor(Math.random() * offensiveSpells.length)];
+      }
+    }
+    
+    // 3. Use defensive spells occasionally (10% chance)
+    if (Math.random() < 0.1) {
       const defensiveSpells = availableSpells.filter(spell =>
-        spell.category === 'Defense'
+        spell.category === 'Defense' || spell.displayName.toLowerCase().includes('shield')
       );
       if (defensiveSpells.length > 0) {
+        console.log("🤖 Bot choosing defensive spell");
         return defensiveSpells[Math.floor(Math.random() * defensiveSpells.length)];
       }
     }
     
-    // Default to offensive spells
-    const spellPool = offensiveSpells.length > 0 ? offensiveSpells : availableSpells;
-    return spellPool[Math.floor(Math.random() * spellPool.length)];
+    // 4. Default to random available spell
+    return availableSpells[Math.floor(Math.random() * availableSpells.length)];
   }
   
-  // Bot behavior for elemental strategy
+  // Get preferred counter element (for advanced strategy)
   getPreferredCounter(lastPlayerElement?: Element): Element {
     if (!lastPlayerElement) {
-      // Random element when no context
       const elements: Element[] = ['fire', 'ice', 'lightning', 'shadow', 'nature', 'arcane'];
       return elements[Math.floor(Math.random() * elements.length)];
     }
     
-    // Simple counter logic
+    // Simple counter system
     const counters: Record<Element, Element> = {
       fire: 'ice',
-      ice: 'fire', 
+      ice: 'fire',
       lightning: 'shadow',
       shadow: 'lightning',
       nature: 'fire',
-      arcane: 'arcane' // Neutral
+      arcane: 'arcane'
     };
     
-    // Bot doesn't always play perfectly
-    if (Math.random() < 0.3) {
-      return lastPlayerElement; // Sometimes copy
+    // Bot strategy: 60% counter, 20% same element, 20% random
+    const rand = Math.random();
+    if (rand < 0.6) {
+      return counters[lastPlayerElement] || 'arcane';
+    } else if (rand < 0.8) {
+      return lastPlayerElement; // Copy player
+    } else {
+      const elements: Element[] = ['fire', 'ice', 'lightning', 'shadow', 'nature', 'arcane'];
+      return elements[Math.floor(Math.random() * elements.length)];
     }
-    
-    return counters[lastPlayerElement] || 'arcane';
   }
 }
